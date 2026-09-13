@@ -11,6 +11,7 @@ function App() {
     return (
       <Designer
         image={designerData.image}
+        imageFile={designerData.imageFile}
         style={designerData.style}
         budget={designerData.budget}
       />

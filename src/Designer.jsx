@@ -1,7 +1,11 @@
 import { useState } from "react";
 
-function Designer({ image, style, budget }) {
+function Designer({ image, imageFile, style, budget }) {
     const [message, setMessage] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [generating, setGenerating] = useState(false);
+    const [generatedImage, setGeneratedImage] = useState(null);
+
     const [messages, setMessages] = useState([
         {
             sender: "ai",
@@ -9,18 +13,116 @@ function Designer({ image, style, budget }) {
         },
     ]);
 
-    function sendMessage() {
-        if (!message.trim()) return;
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
 
-        setMessages([
-            ...messages,
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function sendMessage() {
+        if (!message.trim() || loading) return;
+
+        const userMessage = message;
+
+        setMessages((prev) => [
+            ...prev,
             {
                 sender: "user",
-                text: message,
+                text: userMessage,
             },
         ]);
 
         setMessage("");
+        setLoading(true);
+
+        try {
+            let imageData = null;
+
+            if (imageFile) {
+                imageData = await fileToBase64(imageFile);
+            }
+
+            const response = await fetch(
+                "http://localhost:5000/api/chat",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        message: userMessage,
+                        style: style,
+                        budget: budget,
+                        image: imageData,
+                    }),
+                }
+            );
+
+            const data = await response.json();
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    sender: "ai",
+                    text: data.reply,
+                },
+            ]);
+        } catch (error) {
+            console.error(error);
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    sender: "ai",
+                    text: "Sorry, I couldn't connect to Roomora.",
+                },
+            ]);
+        }
+
+        setLoading(false);
+    }
+
+    async function generateRoom() {
+        if (!imageFile || generating) return;
+
+        setGenerating(true);
+
+        try {
+            const imageData = await fileToBase64(imageFile);
+
+            const response = await fetch(
+                "http://localhost:5000/api/generate-room",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        image: imageData,
+                        style: style,
+                        budget: budget,
+                    }),
+                }
+            );
+
+            const data = await response.json();
+
+            if (data.image) {
+                setGeneratedImage(data.image);
+            } else {
+                alert("Could not generate the room.");
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Something went wrong while generating the room.");
+        }
+
+        setGenerating(false);
     }
 
     return (
@@ -38,14 +140,26 @@ function Designer({ image, style, budget }) {
                 </button>
 
                 <div className="mt-8 space-y-5 text-sm text-gray-500">
-                    <p className="cursor-pointer text-black">My designs</p>
-                    <p className="cursor-pointer hover:text-black">Saved</p>
-                    <p className="cursor-pointer hover:text-black">Explore</p>
-                    <p className="cursor-pointer hover:text-black">Shop</p>
+
+                    <p className="cursor-pointer text-black">
+                        My designs
+                    </p>
+
+                    <p className="cursor-pointer hover:text-black">
+                        Saved
+                    </p>
+
+                    <p className="cursor-pointer hover:text-black">
+                        Explore
+                    </p>
+
+                    <p className="cursor-pointer hover:text-black">
+                        Shop
+                    </p>
+
                 </div>
 
             </aside>
-
 
             {/* Main */}
             <main className="flex min-h-screen flex-1 flex-col">
@@ -54,6 +168,7 @@ function Designer({ image, style, budget }) {
                 <header className="flex items-center justify-between border-b border-gray-200 px-6 py-5">
 
                     <div>
+
                         <p className="text-sm text-gray-400">
                             Your design
                         </p>
@@ -61,6 +176,7 @@ function Designer({ image, style, budget }) {
                         <h2 className="font-medium">
                             {style} Room
                         </h2>
+
                     </div>
 
                     <button className="rounded-full border border-gray-300 px-5 py-2 text-sm">
@@ -68,7 +184,6 @@ function Designer({ image, style, budget }) {
                     </button>
 
                 </header>
-
 
                 {/* Content */}
                 <div className="grid flex-1 lg:grid-cols-2">
@@ -79,7 +194,7 @@ function Designer({ image, style, budget }) {
                         <div className="mb-4 flex justify-between">
 
                             <h3 className="font-medium">
-                                Your room
+                                {generatedImage ? "Redesigned room" : "Your room"}
                             </h3>
 
                             <span className="text-sm text-gray-400">
@@ -90,32 +205,44 @@ function Designer({ image, style, budget }) {
 
                         <div className="flex flex-1 items-center justify-center overflow-hidden rounded-3xl bg-[#e9e5dc]">
 
-                            {image ? (
+                            {generatedImage ? (
+
+                                <img
+                                    src={generatedImage}
+                                    alt="Redesigned room"
+                                    className="h-full max-h-[650px] w-full object-cover"
+                                />
+
+                            ) : image ? (
+
                                 <img
                                     src={image}
                                     alt="Your room"
                                     className="h-full max-h-[650px] w-full object-cover"
                                 />
+
                             ) : (
+
                                 <div className="text-center text-gray-400">
                                     <p>No room image</p>
                                 </div>
+
                             )}
 
                         </div>
 
                     </section>
 
-
                     {/* Chat */}
                     <section className="flex min-h-[600px] flex-col">
 
                         <div className="border-b border-gray-200 px-6 py-5">
+
                             <p className="text-sm uppercase tracking-[0.2em] text-[#9b8b72]">
                                 AI Designer
                             </p>
-                        </div>
 
+                        </div>
 
                         {/* Messages */}
                         <div className="flex-1 space-y-6 overflow-y-auto p-6">
@@ -143,8 +270,19 @@ function Designer({ image, style, budget }) {
 
                             ))}
 
-                        </div>
+                            {loading && (
 
+                                <div className="flex justify-start">
+
+                                    <div className="rounded-2xl bg-white px-5 py-4 text-sm text-gray-400">
+                                        Roomora is thinking...
+                                    </div>
+
+                                </div>
+
+                            )}
+
+                        </div>
 
                         {/* Input */}
                         <div className="border-t border-gray-200 p-5">
@@ -153,7 +291,9 @@ function Designer({ image, style, budget }) {
 
                                 <input
                                     value={message}
-                                    onChange={(e) => setMessage(e.target.value)}
+                                    onChange={(e) =>
+                                        setMessage(e.target.value)
+                                    }
                                     onKeyDown={(e) => {
                                         if (e.key === "Enter") {
                                             sendMessage();
@@ -165,9 +305,24 @@ function Designer({ image, style, budget }) {
 
                                 <button
                                     onClick={sendMessage}
-                                    className="rounded-xl bg-[#20201e] px-4 py-2 text-sm text-white"
+                                    disabled={loading}
+                                    className="rounded-xl bg-[#20201e] px-4 py-2 text-sm text-white disabled:opacity-50"
                                 >
                                     →
+                                </button>
+
+                            </div>
+
+                            <div className="mt-3 flex justify-center">
+
+                                <button
+                                    onClick={generateRoom}
+                                    disabled={generating}
+                                    className="text-sm text-[#9b8b72] hover:underline disabled:opacity-50"
+                                >
+                                    {generating
+                                        ? "✨ Designing your room..."
+                                        : "✨ Generate redesigned room"}
                                 </button>
 
                             </div>
