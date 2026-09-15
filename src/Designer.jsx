@@ -13,15 +13,21 @@ function Designer({ image, imageFile, style, budget }) {
         },
     ]);
 
-    function fileToBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
+    async function fileToBase64(file) {
+        // Read the file as bytes and encode it to a base64 data URL.
+        // (Note: `FileReader` does not exist in browsers — use the
+        // standard File/Blob API instead.)
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
 
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
+        let binary = "";
+        const chunkSize = 0x8000;
 
-            reader.readAsDataURL(file);
-        });
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+
+        return `data:${file.type};base64,${btoa(binary)}`;
     }
 
     async function sendMessage() {
@@ -115,7 +121,7 @@ function Designer({ image, imageFile, style, budget }) {
             if (data.image) {
                 setGeneratedImage(data.image);
             } else {
-                alert("Could not generate the room.");
+                alert(data.detail || "Could not generate the room.");
             }
         } catch (error) {
             console.error(error);
