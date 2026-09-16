@@ -1,6 +1,13 @@
 import { useState } from "react";
 
-function Designer({ image, imageFile, style, budget }) {
+function Designer({
+    image,
+    imageFile,
+    style,
+    budget,
+    onSave,
+    onBack,
+}) {
     const [message, setMessage] = useState("");
     const [loading, setLoading] = useState(false);
     const [generating, setGenerating] = useState(false);
@@ -8,38 +15,46 @@ function Designer({ image, imageFile, style, budget }) {
 
     const [messages, setMessages] = useState([
         {
-            sender: "ai",
-            text: `Hi! I'm Roomora. I can help you create a ${style} look for your room.`,
+            role: "assistant",
+            content: `Hi! I'm Roomora. I can help you create a ${style} look for your room.`,
         },
     ]);
 
-    async function fileToBase64(file) {
-        // Read the file as bytes and encode it to a base64 data URL.
-        // (Note: `FileReader` does not exist in browsers — use the
-        // standard File/Blob API instead.)
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
+    const quickPrompts = [
+        "How can I improve this room?",
+        "What furniture should I add?",
+        "How can I improve the lighting?",
+        "Suggest colors for my room",
+    ];
 
-        let binary = "";
-        const chunkSize = 0x8000;
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
 
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-        }
+            reader.readAsDataURL(file);
 
-        return `data:${file.type};base64,${btoa(binary)}`;
+            reader.onload = () => {
+                resolve(reader.result);
+            };
+
+            reader.onerror = (error) => {
+                reject(error);
+            };
+        });
     }
 
-    async function sendMessage() {
-        if (!message.trim() || loading) return;
+    async function sendMessage(customMessage = null) {
+        const userMessage = customMessage || message;
 
-        const userMessage = message;
+        if (!userMessage.trim()) {
+            return;
+        }
 
         setMessages((prev) => [
             ...prev,
             {
-                sender: "user",
-                text: userMessage,
+                role: "user",
+                content: userMessage,
             },
         ]);
 
@@ -57,13 +72,15 @@ function Designer({ image, imageFile, style, budget }) {
                 "http://localhost:5000/api/chat",
                 {
                     method: "POST",
+
                     headers: {
                         "Content-Type": "application/json",
                     },
+
                     body: JSON.stringify({
                         message: userMessage,
-                        style: style,
-                        budget: budget,
+                        style,
+                        budget,
                         image: imageData,
                     }),
                 }
@@ -71,11 +88,17 @@ function Designer({ image, imageFile, style, budget }) {
 
             const data = await response.json();
 
+            if (!response.ok) {
+                throw new Error(data.error || "Something went wrong");
+            }
+
             setMessages((prev) => [
                 ...prev,
                 {
-                    sender: "ai",
-                    text: data.reply,
+                    role: "assistant",
+                    content:
+                        data.reply ||
+                        "I couldn't generate a response right now.",
                 },
             ]);
         } catch (error) {
@@ -84,17 +107,21 @@ function Designer({ image, imageFile, style, budget }) {
             setMessages((prev) => [
                 ...prev,
                 {
-                    sender: "ai",
-                    text: "Sorry, I couldn't connect to Roomora.",
+                    role: "assistant",
+                    content:
+                        "I couldn't connect to Roomora AI right now. Please try again when the AI service is running.",
                 },
             ]);
+        } finally {
+            setLoading(false);
         }
-
-        setLoading(false);
     }
 
     async function generateRoom() {
-        if (!imageFile || generating) return;
+        if (!imageFile) {
+            alert("Please upload a room image first.");
+            return;
+        }
 
         setGenerating(true);
 
@@ -105,182 +132,260 @@ function Designer({ image, imageFile, style, budget }) {
                 "http://localhost:5000/api/generate-room",
                 {
                     method: "POST",
+
                     headers: {
                         "Content-Type": "application/json",
                     },
+
                     body: JSON.stringify({
                         image: imageData,
-                        style: style,
-                        budget: budget,
+                        style,
+                        budget,
                     }),
                 }
             );
 
             const data = await response.json();
 
-            if (data.image) {
-                setGeneratedImage(data.image);
-            } else {
-                alert(data.detail || "Could not generate the room.");
+            if (!response.ok) {
+                throw new Error(
+                    data.error || "Unable to generate room"
+                );
             }
+
+            setGeneratedImage(data.image);
         } catch (error) {
             console.error(error);
-            alert("Something went wrong while generating the room.");
+
+            alert(
+                "Room generation is not available yet. The AI chat can still be used."
+            );
+        } finally {
+            setGenerating(false);
+        }
+    }
+
+    function handleSave() {
+        if (!onSave) {
+            return;
         }
 
-        setGenerating(false);
+        onSave({
+            image,
+            style,
+            budget,
+        });
     }
 
     return (
-        <div className="flex min-h-screen bg-[#f7f5f0]">
+        <div className="min-h-screen bg-[#f7f5f0]">
 
-            {/* Sidebar */}
-            <aside className="hidden w-60 border-r border-gray-200 bg-[#f7f5f0] p-6 md:block">
+            {/* Top Bar */}
 
-                <h1 className="text-2xl font-semibold">
-                    roomora<span className="text-[#9b8b72]">.</span>
-                </h1>
+            <header className="flex items-center justify-between border-b border-[#dedbd4] bg-[#f7f5f0] px-5 py-4 md:px-8">
 
-                <button className="mt-10 w-full rounded-xl bg-[#20201e] px-4 py-3 text-sm text-white">
-                    + New design
-                </button>
+                <div className="flex items-center gap-5">
 
-                <div className="mt-8 space-y-5 text-sm text-gray-500">
+                    <button
+                        onClick={onBack}
+                        className="text-sm text-gray-500 transition hover:text-[#20201e]"
+                    >
+                        ← Back
+                    </button>
 
-                    <p className="cursor-pointer text-black">
-                        My designs
-                    </p>
+                    <div className="h-5 w-px bg-[#d8d3ca]" />
 
-                    <p className="cursor-pointer hover:text-black">
-                        Saved
-                    </p>
-
-                    <p className="cursor-pointer hover:text-black">
-                        Explore
-                    </p>
-
-                    <p className="cursor-pointer hover:text-black">
-                        Shop
-                    </p>
+                    <h1 className="text-2xl font-semibold tracking-tight">
+                        roomora<span className="text-[#9b8b72]">.</span>
+                    </h1>
 
                 </div>
 
-            </aside>
+
+                <button
+                    onClick={handleSave}
+                    className="rounded-full border border-[#d8d3ca] bg-white px-5 py-2.5 text-sm font-medium transition hover:bg-[#f1eee8]"
+                >
+                    Save design
+                </button>
+
+            </header>
+
 
             {/* Main */}
-            <main className="flex min-h-screen flex-1 flex-col">
 
-                {/* Header */}
-                <header className="flex items-center justify-between border-b border-gray-200 px-6 py-5">
+            <main className="mx-auto max-w-7xl px-5 py-6 md:px-8 md:py-8">
 
-                    <div>
+                <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
 
-                        <p className="text-sm text-gray-400">
-                            Your design
-                        </p>
 
-                        <h2 className="font-medium">
-                            {style} Room
-                        </h2>
+                    {/* Left Side */}
 
-                    </div>
+                    <section className="overflow-hidden rounded-[2rem] border border-[#dedbd4] bg-white">
 
-                    <button className="rounded-full border border-gray-300 px-5 py-2 text-sm">
-                        Save design
-                    </button>
-
-                </header>
-
-                {/* Content */}
-                <div className="grid flex-1 lg:grid-cols-2">
-
-                    {/* Room */}
-                    <section className="flex flex-col border-b border-gray-200 p-6 lg:border-b-0 lg:border-r">
-
-                        <div className="mb-4 flex justify-between">
-
-                            <h3 className="font-medium">
-                                {generatedImage ? "Redesigned room" : "Your room"}
-                            </h3>
-
-                            <span className="text-sm text-gray-400">
-                                {style} · ₹{budget || "—"}
-                            </span>
-
-                        </div>
-
-                        <div className="flex flex-1 items-center justify-center overflow-hidden rounded-3xl bg-[#e9e5dc]">
+                        <div className="relative">
 
                             {generatedImage ? (
 
                                 <img
                                     src={generatedImage}
-                                    alt="Redesigned room"
-                                    className="h-full max-h-[650px] w-full object-cover"
-                                />
-
-                            ) : image ? (
-
-                                <img
-                                    src={image}
-                                    alt="Your room"
-                                    className="h-full max-h-[650px] w-full object-cover"
+                                    alt="Generated room design"
+                                    className="h-[520px] w-full object-cover md:h-[650px]"
                                 />
 
                             ) : (
 
-                                <div className="text-center text-gray-400">
-                                    <p>No room image</p>
-                                </div>
+                                <img
+                                    src={image}
+                                    alt="Your room"
+                                    className="h-[520px] w-full object-cover md:h-[650px]"
+                                />
 
                             )}
+
+
+                            {/* Image Label */}
+
+                            <div className="absolute left-5 top-5 rounded-full bg-white/90 px-4 py-2 text-xs font-medium shadow-sm backdrop-blur">
+
+                                {generatedImage
+                                    ? "Roomora concept"
+                                    : "Your room"}
+
+                            </div>
+
+                        </div>
+
+
+                        {/* Room Information */}
+
+                        <div className="flex flex-wrap items-center justify-between gap-4 p-5 md:p-6">
+
+                            <div>
+
+                                <p className="text-xs uppercase tracking-[0.18em] text-[#9b8b72]">
+                                    Current design
+                                </p>
+
+                                <h2 className="mt-1 text-xl font-medium">
+                                    {style} room
+                                </h2>
+
+                            </div>
+
+
+                            <div className="flex flex-wrap gap-2">
+
+                                <span className="rounded-full bg-[#f1eee8] px-4 py-2 text-xs text-gray-600">
+                                    {style}
+                                </span>
+
+                                <span className="rounded-full bg-[#f1eee8] px-4 py-2 text-xs text-gray-600">
+                                    ₹{budget || "Budget not set"}
+                                </span>
+
+                            </div>
+
+                        </div>
+
+
+                        {/* Generate Button */}
+
+                        <div className="border-t border-[#eeeae3] p-5 md:p-6">
+
+                            <button
+                                onClick={generateRoom}
+                                disabled={generating}
+                                className="w-full rounded-2xl bg-[#20201e] px-6 py-4 text-sm font-medium text-white transition hover:bg-[#333330] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+
+                                {generating
+                                    ? "Creating your room..."
+                                    : "Generate redesigned room →"}
+
+                            </button>
+
+                            <p className="mt-3 text-center text-xs text-gray-400">
+                                Turn your room photo into an AI design concept.
+                            </p>
 
                         </div>
 
                     </section>
 
-                    {/* Chat */}
-                    <section className="flex min-h-[600px] flex-col">
 
-                        <div className="border-b border-gray-200 px-6 py-5">
+                    {/* Right Side - AI Designer */}
 
-                            <p className="text-sm uppercase tracking-[0.2em] text-[#9b8b72]">
-                                AI Designer
-                            </p>
+                    <section className="flex min-h-[700px] flex-col overflow-hidden rounded-[2rem] border border-[#dedbd4] bg-white">
+
+                        {/* Chat Header */}
+
+                        <div className="border-b border-[#eeeae3] p-6">
+
+                            <div className="flex items-start justify-between gap-4">
+
+                                <div>
+
+                                    <p className="text-xs uppercase tracking-[0.2em] text-[#9b8b72]">
+                                        Roomora AI
+                                    </p>
+
+                                    <h2 className="mt-2 text-2xl font-medium">
+                                        Your AI designer
+                                    </h2>
+
+                                    <p className="mt-2 text-sm leading-6 text-gray-500">
+                                        Ask anything about your room,
+                                        style, furniture or budget.
+                                    </p>
+
+                                </div>
+
+
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#20201e] text-sm text-white">
+                                    R
+                                </div>
+
+                            </div>
 
                         </div>
 
-                        {/* Messages */}
-                        <div className="flex-1 space-y-6 overflow-y-auto p-6">
 
-                            {messages.map((item, index) => (
+                        {/* Messages */}
+
+                        <div className="flex-1 space-y-5 overflow-y-auto p-6">
+
+                            {messages.map((msg, index) => (
 
                                 <div
                                     key={index}
-                                    className={`flex ${item.sender === "user"
+                                    className={`flex ${
+                                        msg.role === "user"
                                             ? "justify-end"
                                             : "justify-start"
-                                        }`}
+                                    }`}
                                 >
 
                                     <div
-                                        className={`max-w-md rounded-2xl px-5 py-4 text-sm leading-6 ${item.sender === "user"
-                                                ? "bg-[#20201e] text-white"
-                                                : "bg-white text-gray-700"
-                                            }`}
+                                        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                                            msg.role === "user"
+                                                ? "rounded-br-md bg-[#20201e] text-white"
+                                                : "rounded-bl-md bg-[#f1eee8] text-gray-700"
+                                        }`}
                                     >
-                                        {item.text}
+                                        {msg.content}
                                     </div>
 
                                 </div>
 
                             ))}
 
+
                             {loading && (
 
                                 <div className="flex justify-start">
 
-                                    <div className="rounded-2xl bg-white px-5 py-4 text-sm text-gray-400">
+                                    <div className="rounded-2xl rounded-bl-md bg-[#f1eee8] px-4 py-3 text-sm text-gray-500">
                                         Roomora is thinking...
                                     </div>
 
@@ -290,12 +395,43 @@ function Designer({ image, imageFile, style, budget }) {
 
                         </div>
 
-                        {/* Input */}
-                        <div className="border-t border-gray-200 p-5">
 
-                            <div className="flex items-center rounded-2xl border border-gray-300 bg-white px-4">
+                        {/* Quick Prompts */}
+
+                        <div className="border-t border-[#eeeae3] px-6 pt-5">
+
+                            <p className="mb-3 text-xs uppercase tracking-[0.15em] text-gray-400">
+                                Try asking
+                            </p>
+
+                            <div className="flex gap-2 overflow-x-auto pb-4">
+
+                                {quickPrompts.map((prompt) => (
+
+                                    <button
+                                        key={prompt}
+                                        onClick={() => sendMessage(prompt)}
+                                        disabled={loading}
+                                        className="shrink-0 rounded-full border border-[#d8d3ca] px-4 py-2 text-xs text-gray-600 transition hover:border-[#9b8b72] hover:bg-[#f7f5f0] disabled:opacity-50"
+                                    >
+                                        {prompt}
+                                    </button>
+
+                                ))}
+
+                            </div>
+
+                        </div>
+
+
+                        {/* Chat Input */}
+
+                        <div className="p-6 pt-2">
+
+                            <div className="flex items-center gap-2 rounded-2xl border border-[#d8d3ca] bg-[#faf9f6] p-2 focus-within:border-[#9b8b72]">
 
                                 <input
+                                    type="text"
                                     value={message}
                                     onChange={(e) =>
                                         setMessage(e.target.value)
@@ -305,37 +441,19 @@ function Designer({ image, imageFile, style, budget }) {
                                             sendMessage();
                                         }
                                     }}
-                                    placeholder="Ask Roomora about your room..."
-                                    className="flex-1 bg-transparent py-4 text-sm outline-none"
+                                    placeholder="Ask Roomora anything..."
+                                    className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm outline-none"
                                 />
 
                                 <button
-                                    onClick={sendMessage}
-                                    disabled={loading}
-                                    className="rounded-xl bg-[#20201e] px-4 py-2 text-sm text-white disabled:opacity-50"
+                                    onClick={() => sendMessage()}
+                                    disabled={loading || !message.trim()}
+                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#20201e] text-white transition hover:bg-[#333330] disabled:cursor-not-allowed disabled:opacity-40"
                                 >
-                                    →
+                                    ↑
                                 </button>
 
                             </div>
-
-                            <div className="mt-3 flex justify-center">
-
-                                <button
-                                    onClick={generateRoom}
-                                    disabled={generating}
-                                    className="text-sm text-[#9b8b72] hover:underline disabled:opacity-50"
-                                >
-                                    {generating
-                                        ? "✨ Designing your room..."
-                                        : "✨ Generate redesigned room"}
-                                </button>
-
-                            </div>
-
-                            <p className="mt-3 text-center text-xs text-gray-400">
-                                Roomora can make mistakes. Check important information.
-                            </p>
 
                         </div>
 
@@ -348,5 +466,5 @@ function Designer({ image, imageFile, style, budget }) {
         </div>
     );
 }
-
 export default Designer;
+
