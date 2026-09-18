@@ -2,199 +2,253 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { GoogleGenAI } = require("@google/genai");
-const { InferenceClient } = require("@huggingface/inference");
 
 dotenv.config();
 
 const app = express();
+const PORT = 5000;
 
-app.use(cors());
-app.use(express.json({ limit: "25mb" }));
+// -------------------------
+// MIDDLEWARE
+// -------------------------
 
+app.use(
+    cors({
+        origin: [
+            "http://localhost:5173",
+            "http://localhost:3000",
+        ],
+    })
+);
 
-// ===============================
-// AI Clients
-// ===============================
+app.use(express.json({ limit: "12mb" }));
+
+// -------------------------
+// GEMINI
+// -------------------------
+
+if (!process.env.GEMINI_API_KEY) {
+    console.error("GEMINI_API_KEY is missing in .env");
+    process.exit(1);
+}
 
 const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
+    apiKey: process.env.GEMINI_API_KEY,
 });
 
-// NOTE: InferenceClient(accessToken, options?) — the token must be a
-// string. The provider is selected per-call with `provider: "fal-ai"`.
-const hf = new InferenceClient(process.env.HF_TOKEN);
+console.log("Gemini API loaded successfully");
 
+// -------------------------
+// HELPERS
+// -------------------------
 
-// ===============================
-// Roomora AI Chat
-// Gemini
-// ===============================
+function cleanImageData(image) {
+    if (!image) {
+        return null;
+    }
+
+    let mimeType = "image/jpeg";
+    let data = image;
+
+    if (image.startsWith("data:")) {
+        const match = image.match(
+            /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/
+        );
+
+        if (match) {
+            mimeType = match[1];
+            data = match[2];
+        }
+    }
+
+    return {
+        mimeType,
+        data,
+    };
+}
+
+// -------------------------
+// HEALTH CHECK
+// -------------------------
+
+app.get("/", (req, res) => {
+    res.json({
+        message: "Roomora backend is running",
+    });
+});
+
+// -------------------------
+// AI CHAT - TEXT ONLY
+// -------------------------
 
 app.post("/api/chat", async (req, res) => {
     try {
-        const { message, style, budget, image } = req.body;
+        const {
+            message,
+            style = "Modern",
+            budget = "Not specified",
+        } = req.body;
 
-        const contents = [
-            {
-                text: `
-You are Roomora, an AI interior designer.
-
-Analyze the user's room photo and give personalized interior design advice.
-
-Selected style: ${style || "Not specified"}
-Budget: ₹${budget || "Not specified"}
-
-User's question:
-${message}
-
-Rules:
-- Look carefully at the room photo.
-- Give advice based on what you can actually see.
-- Consider the selected style and budget.
-- Suggest specific changes to furniture, layout, colors, lighting and decor.
-- Prioritize affordable and realistic changes.
-- Do not invent things that are not visible in the image.
-- Keep the answer concise and easy to read.
-- Use bullet points when useful.
-`
-            }
-        ];
-
-        if (image) {
-            const base64Data = image.split(",")[1];
-
-            const mimeType =
-                image.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
-
-            contents.push({
-                inlineData: {
-                    mimeType: mimeType,
-                    data: base64Data
-                }
+        if (!message || !message.trim()) {
+            return res.status(400).json({
+                error: "Message is required",
             });
         }
 
+        console.log("Received text-only chat request");
+        console.log("Message:", message);
+
+        const prompt = `
+You are Roomora, an AI interior design assistant.
+
+Your job is to help users with practical and personalized
+interior design advice.
+
+Selected room style:
+${style}
+
+User budget:
+₹${budget || "Not specified"}
+
+User message:
+${message}
+
+Instructions:
+- Give practical interior design advice.
+- Respect the selected style.
+- Respect the user's budget when relevant.
+- Suggest realistic furniture, colors, lighting, decor and layout ideas.
+- Keep recommendations suitable for a normal home.
+- Be friendly and easy to understand.
+- Do not make unsupported claims.
+- Keep the response reasonably concise.
+- Use simple formatting when helpful.
+`;
+
         const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: contents
+            model: "gemini-3.5-flash-lite",
+            contents: prompt,
         });
+
+        console.log("Gemini text response received");
+
+        const text =
+            response.text ||
+            "I couldn't generate a response right now.";
 
         res.json({
-            reply: response.text
+            reply: text,
         });
-
     } catch (error) {
-        console.error("Chat error:", error.message || error);
+        console.error("CHAT ERROR:");
+        console.error(error);
 
         res.status(500).json({
-            reply: "Sorry, something went wrong.",
-            detail: String(error.message || error)
+            error: "Gemini text request failed",
+            details: error.message,
         });
     }
 });
 
-
-// ===============================
-// Roomora AI Room Generation
-// Hugging Face + FLUX
-// ===============================
+// -------------------------
+// GENERATE REDESIGNED ROOM
+// -------------------------
 
 app.post("/api/generate-room", async (req, res) => {
     try {
-        const { image, style, budget } = req.body;
+        const {
+            style = "Modern",
+            budget = "Not specified",
+            image,
+        } = req.body;
 
         if (!image) {
             return res.status(400).json({
-                error: "Room image is required"
+                error: "Room image is required",
             });
         }
 
-        // Get image data from data URL
-        const base64Data = image.split(",")[1];
+        const roomImage = cleanImageData(image);
 
-        // Detect original image type
-        const mimeType =
-            image.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
-
-        // Convert base64 to Buffer
-        const imageBuffer = Buffer.from(base64Data, "base64");
-
-        // Convert Buffer to Blob
-        const imageBlob = new Blob([imageBuffer], {
-            type: mimeType
-        });
+        if (!roomImage) {
+            return res.status(400).json({
+                error: "Invalid image",
+            });
+        }
 
         const prompt = `
-Redesign this exact room as a professional interior designer.
+Redesign the uploaded room as a professional interior designer.
 
-Style: ${style || "Modern"}
-Budget: ₹${budget || "Not specified"}
+Selected style:
+${style}
 
-Keep the same:
-- room layout
-- walls
-- windows
-- doors
-- camera perspective
-- room proportions
+Budget:
+₹${budget || "Not specified"}
 
-Improve:
-- furniture
-- wall colors
-- lighting
-- storage
-- decor
-- organization
-
-Make the design realistic and achievable within the budget.
-
-Do not change the architecture.
-Do not remove important existing room structures.
-Do not create unrealistic objects.
-
-Create a photorealistic interior design visualization.
+Requirements:
+- Preserve the room's basic architecture, walls, windows, doors and camera perspective.
+- Keep the redesign realistic and achievable.
+- Transform the room into the requested ${style} interior style.
+- Improve furniture, colors, lighting, decor, materials and overall arrangement.
+- Make the room look polished, warm and professionally designed.
+- Respect the user's budget and avoid unnecessarily expensive-looking items.
+- Do not turn the room into a completely different architectural space.
+- Keep the result photorealistic.
+- Make the final image look like a realistic before-and-after interior design concept.
 `;
 
-        console.log("Generating redesigned room...");
-
-        // Hugging Face + FLUX image-to-image
-        const result = await hf.imageToImage({
-            inputs: imageBlob,
-            model: "black-forest-labs/FLUX.2-dev",
-            provider: "fal-ai",
-            parameters: {
-                prompt: prompt
-            }
+        const interaction = await ai.interactions.create({
+            model: "gemini-3.1-flash-image",
+            input: [
+                {
+                    type: "text",
+                    text: prompt,
+                },
+                {
+                    type: "image",
+                    mime_type: roomImage.mimeType,
+                    data: roomImage.data,
+                },
+            ],
+            response_format: {
+                type: "image",
+            },
         });
 
-        // Convert generated image to base64
-        const arrayBuffer = await result.arrayBuffer();
+        const generatedImage = interaction.output_image;
 
-        const generatedBase64 =
-            Buffer.from(arrayBuffer).toString("base64");
+        if (!generatedImage) {
+            return res.status(500).json({
+                error: "The image model did not return an image",
+            });
+        }
 
-        // Send image back to frontend
+        const mimeType =
+            generatedImage.mime_type || "image/png";
+
+        const imageData =
+            `data:${mimeType};base64,${generatedImage.data}`;
+
         res.json({
-            image: `data:image/png;base64,${generatedBase64}`
+            image: imageData,
         });
-
     } catch (error) {
-        console.error("Room generation error:", error.message || error);
+        console.error("IMAGE GENERATION ERROR:");
+        console.error(error);
 
         res.status(500).json({
             error: "Failed to generate redesigned room",
-            detail: String(error.message || error)
+            details: error.message,
         });
     }
 });
 
+// -------------------------
+// START SERVER
+// -------------------------
 
-// ===============================
-// Start Server
-// ===============================
-
-app.listen(5000, () => {
+app.listen(PORT, () => {
     console.log(
-        "Roomora backend running on http://localhost:5000"
+        `Roomora backend running on http://localhost:${PORT}`
     );
 });

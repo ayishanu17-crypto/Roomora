@@ -1,56 +1,464 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+import {
+  onAuthStateChanged,
+  signOut,
+} from "firebase/auth";
+
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+
+import { auth, db } from "./firebase";
+
 import Design from "./Design";
 import Designer from "./Designer";
 import Auth from "./Auth";
 
-function App() {
-  const [designing, setDesigning] = useState(false);
-  const [designerData, setDesignerData] = useState(null);
-  const [selectedStyle, setSelectedStyle] = useState("Modern");
-  const [showDesigns, setShowDesigns] = useState(false);
-  const [showAllStyles, setShowAllStyles] = useState(false);
-  const [showShop, setShowShop] = useState(false);
-  const [showExplore, setShowExplore] = useState(false);
-  const [showAuth, setShowAuth] = useState(false);
+// -------------------------
+// IMAGE COMPRESSION
+// -------------------------
 
-  const [savedDesigns, setSavedDesigns] = useState(() => {
-    const saved = localStorage.getItem("roomoraDesigns");
-    return saved ? JSON.parse(saved) : [];
-  });
+async function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
 
-  function saveDesign(design) {
-    const newDesign = {
-      id: Date.now(),
-      image: design.image,
-      style: design.style,
-      budget: design.budget,
-      createdAt: new Date().toLocaleDateString(),
+    reader.onload = () => {
+      resolve(reader.result);
     };
 
-    const updatedDesigns = [newDesign, ...savedDesigns];
+    reader.onerror = reject;
 
-    setSavedDesigns(updatedDesigns);
+    reader.readAsDataURL(blob);
+  });
+}
 
-    localStorage.setItem(
-      "roomoraDesigns",
-      JSON.stringify(updatedDesigns)
-    );
-
-    alert("Design saved successfully!");
+async function getImageBlob(source) {
+  if (source instanceof Blob) {
+    return source;
   }
 
-  function deleteDesign(id) {
-    const updatedDesigns = savedDesigns.filter(
-      (design) => design.id !== id
-    );
+  if (typeof source === "string") {
+    const response = await fetch(source);
 
-    setSavedDesigns(updatedDesigns);
+    if (!response.ok) {
+      throw new Error("Could not read the design image.");
+    }
 
-    localStorage.setItem(
-      "roomoraDesigns",
-      JSON.stringify(updatedDesigns)
-    );
+    return await response.blob();
   }
+
+  throw new Error("Invalid design image.");
+}
+
+async function compressImage(source) {
+  const blob = await getImageBlob(source);
+  const originalDataUrl = await blobToDataUrl(blob);
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+
+    img.onload = () => {
+      let maxSize = 900;
+
+      const attempts = [
+        {
+          size: 900,
+          quality: 0.65,
+        },
+        {
+          size: 750,
+          quality: 0.55,
+        },
+        {
+          size: 650,
+          quality: 0.45,
+        },
+        {
+          size: 550,
+          quality: 0.35,
+        },
+      ];
+
+      for (const attempt of attempts) {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > attempt.size || height > attempt.size) {
+          if (width > height) {
+            height =
+              (height / width) * attempt.size;
+
+            width = attempt.size;
+          } else {
+            width =
+              (width / height) * attempt.size;
+
+            height = attempt.size;
+          }
+        }
+
+        const canvas =
+          document.createElement("canvas");
+
+        canvas.width = Math.round(width);
+        canvas.height = Math.round(height);
+
+        const context =
+          canvas.getContext("2d");
+
+        context.drawImage(
+          img,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+
+        const compressed =
+          canvas.toDataURL(
+            "image/jpeg",
+            attempt.quality
+          );
+
+        // Keep enough space below Firestore's
+        // 1 MiB document limit.
+        if (compressed.length < 700000) {
+          resolve(compressed);
+          return;
+        }
+
+        maxSize = attempt.size;
+      }
+
+      // Final fallback
+      const canvas =
+        document.createElement("canvas");
+
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxSize || height > maxSize) {
+        if (width > height) {
+          height =
+            (height / width) * maxSize;
+
+          width = maxSize;
+        } else {
+          width =
+            (width / height) * maxSize;
+
+          height = maxSize;
+        }
+      }
+
+      canvas.width = Math.round(width);
+      canvas.height = Math.round(height);
+
+      const context =
+        canvas.getContext("2d");
+
+      context.drawImage(
+        img,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+      resolve(
+        canvas.toDataURL(
+          "image/jpeg",
+          0.3
+        )
+      );
+    };
+
+    img.onerror = () => {
+      // Fallback to original image if
+      // browser cannot process it.
+      resolve(originalDataUrl);
+    };
+
+    img.src = originalDataUrl;
+  });
+}
+
+// -------------------------
+// APP
+// -------------------------
+
+function App() {
+  const [designing, setDesigning] =
+    useState(false);
+
+  const [designerData, setDesignerData] =
+    useState(null);
+
+  const [selectedStyle, setSelectedStyle] =
+    useState("Modern");
+
+  const [showDesigns, setShowDesigns] =
+    useState(false);
+
+  const [showAllStyles, setShowAllStyles] =
+    useState(false);
+
+  const [showShop, setShowShop] =
+    useState(false);
+
+  const [showExplore, setShowExplore] =
+    useState(false);
+
+  const [showAuth, setShowAuth] =
+    useState(false);
+
+  const [user, setUser] =
+    useState(null);
+
+  const [showProfile, setShowProfile] =
+    useState(false);
+
+  const [savedDesigns, setSavedDesigns] =
+    useState([]);
+
+  const [designsLoading, setDesignsLoading] =
+    useState(false);
+
+  // -------------------------
+  // AUTH STATE
+  // -------------------------
+
+  useEffect(() => {
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        async (currentUser) => {
+          setUser(currentUser);
+
+          if (!currentUser) {
+            setSavedDesigns([]);
+            setDesignsLoading(false);
+            return;
+          }
+
+          try {
+            setDesignsLoading(true);
+
+            const designsCollection =
+              collection(
+                db,
+                "users",
+                currentUser.uid,
+                "designs"
+              );
+
+            const designsQuery = query(
+              designsCollection,
+              orderBy("createdAt", "desc")
+            );
+
+            const snapshot =
+              await getDocs(designsQuery);
+
+            const designs =
+              snapshot.docs.map((item) => {
+                const data =
+                  item.data();
+
+                return {
+                  id: item.id,
+
+                  image:
+                    data.image || "",
+
+                  style:
+                    data.style || "Modern",
+
+                  budget:
+                    data.budget || "",
+
+                  createdAt:
+                    data.createdAt?.toDate
+                      ? data.createdAt
+                        .toDate()
+                        .toLocaleDateString()
+                      : "Recently saved",
+                };
+              });
+
+            setSavedDesigns(designs);
+          } catch (error) {
+            console.error(
+              "Failed to load designs:",
+              error
+            );
+
+            setSavedDesigns([]);
+          } finally {
+            setDesignsLoading(false);
+          }
+        }
+      );
+
+    return unsubscribe;
+  }, []);
+
+  // -------------------------
+  // LOGOUT
+  // -------------------------
+
+  async function handleLogout() {
+    try {
+      await signOut(auth);
+
+      setShowProfile(false);
+      setShowDesigns(false);
+      setSavedDesigns([]);
+    } catch (error) {
+      console.error(
+        "Logout error:",
+        error
+      );
+    }
+  }
+
+  // -------------------------
+  // SAVE DESIGN
+  // -------------------------
+
+  async function saveDesign(design) {
+    if (!user) {
+      setShowAuth(true);
+      return;
+    }
+
+    try {
+      let imageSource =
+        design.imageFile ||
+        design.image;
+
+      if (!imageSource) {
+        throw new Error(
+          "No room image was found."
+        );
+      }
+
+      const imageData =
+        await compressImage(
+          imageSource
+        );
+
+      const designsCollection =
+        collection(
+          db,
+          "users",
+          user.uid,
+          "designs"
+        );
+
+      const designRef =
+        doc(designsCollection);
+
+      await setDoc(designRef, {
+        userId: user.uid,
+
+        image: imageData,
+
+        style:
+          design.style || "Modern",
+
+        budget:
+          design.budget || "",
+
+        createdAt:
+          serverTimestamp(),
+      });
+
+      const newDesign = {
+        id: designRef.id,
+
+        image: imageData,
+
+        style:
+          design.style || "Modern",
+
+        budget:
+          design.budget || "",
+
+        createdAt:
+          new Date().toLocaleDateString(),
+      };
+
+      setSavedDesigns((previous) => [
+        newDesign,
+        ...previous,
+      ]);
+
+      alert(
+        "Design saved successfully!"
+      );
+    } catch (error) {
+      console.error(
+        "SAVE DESIGN ERROR:",
+        error
+      );
+
+      alert(
+        error.message ||
+        "Could not save your design."
+      );
+    }
+  }
+
+  // -------------------------
+  // DELETE DESIGN
+  // -------------------------
+
+  async function deleteDesign(id) {
+    if (!user) {
+      return;
+    }
+
+    try {
+      await deleteDoc(
+        doc(
+          db,
+          "users",
+          user.uid,
+          "designs",
+          id
+        )
+      );
+
+      setSavedDesigns((previous) =>
+        previous.filter(
+          (design) =>
+            design.id !== id
+        )
+      );
+    } catch (error) {
+      console.error(
+        "DELETE DESIGN ERROR:",
+        error
+      );
+
+      alert(
+        "Could not delete this design."
+      );
+    }
+  }
+
+  // -------------------------
+  // NAVIGATION
+  // -------------------------
 
   function goHome() {
     setShowDesigns(false);
@@ -60,15 +468,18 @@ function App() {
     setShowAuth(false);
     setDesigning(false);
     setDesignerData(null);
+    setShowProfile(false);
   }
 
   function chooseStyle(style) {
     setSelectedStyle(style);
+
     setShowAllStyles(false);
     setShowShop(false);
     setShowExplore(false);
     setShowDesigns(false);
     setShowAuth(false);
+
     setDesigning(true);
     setDesignerData(null);
   }
@@ -94,6 +505,11 @@ function App() {
   }
 
   function openDesigns() {
+    if (!user) {
+      setShowAuth(true);
+      return;
+    }
+
     setShowDesigns(true);
     setShowShop(false);
     setShowExplore(false);
@@ -111,17 +527,21 @@ function App() {
     setShowDesigns(false);
     setDesigning(false);
     setDesignerData(null);
+    setShowProfile(false);
   }
 
   function startDesigning() {
     setSelectedStyle("Modern");
+
     setShowDesigns(false);
     setShowAllStyles(false);
     setShowShop(false);
     setShowExplore(false);
     setShowAuth(false);
+
     setDesignerData(null);
     setDesigning(true);
+    setShowProfile(false);
   }
 
   // -------------------------
@@ -131,7 +551,11 @@ function App() {
   if (showAuth) {
     return (
       <div className="page-enter">
-        <Auth onBack={() => setShowAuth(false)} />
+        <Auth
+          onBack={() =>
+            setShowAuth(false)
+          }
+        />
       </div>
     );
   }
@@ -145,7 +569,9 @@ function App() {
       <div className="page-enter">
         <ExplorePage
           onBack={goHome}
-          onChooseStyle={chooseStyle}
+          onChooseStyle={
+            chooseStyle
+          }
         />
       </div>
     );
@@ -251,11 +677,16 @@ function App() {
               onClick={goHome}
               className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
             >
-              roomora<span className="text-[#9b8b72]">.</span>
+              roomora
+              <span className="text-[#9b8b72]">
+                .
+              </span>
             </button>
 
             <button
-              onClick={startDesigning}
+              onClick={
+                startDesigning
+              }
               className="roomora-button rounded-full bg-[#20201e] px-5 py-2.5 text-sm text-white"
             >
               Start designing
@@ -268,7 +699,7 @@ function App() {
             onClick={goHome}
             className="mb-8 text-sm text-gray-500 transition hover:text-[#20201e]"
           >
-            ← Back to home
+            Back to home
           </button>
 
           <div className="max-w-2xl">
@@ -287,47 +718,65 @@ function App() {
           </div>
 
           <div className="mt-12 grid gap-x-5 gap-y-10 sm:grid-cols-2 lg:mt-14 lg:grid-cols-3">
-            {styles.map((style) => (
-              <button
-                key={style.name}
-                onClick={() => chooseStyle(style.name)}
-                className="group roomora-card rounded-[2rem] text-left"
-              >
-                <div className="image-zoom overflow-hidden rounded-[2rem] bg-white">
-                  <img
-                    src={style.image}
-                    alt={style.name}
-                    className="h-[320px] w-full object-cover sm:h-[360px]"
-                  />
-                </div>
-
-                <div className="mt-5 flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl font-medium">
-                      {style.name}
-                    </h2>
-
-                    <p className="mt-2 max-w-sm text-sm leading-6 text-gray-500">
-                      {style.description}
-                    </p>
+            {styles.map(
+              (style) => (
+                <button
+                  key={style.name}
+                  onClick={() =>
+                    chooseStyle(
+                      style.name
+                    )
+                  }
+                  className="group roomora-card rounded-[2rem] text-left"
+                >
+                  <div className="image-motion overflow-hidden rounded-[2rem] bg-white">
+                    <img
+                      src={
+                        style.image
+                      }
+                      alt={
+                        style.name
+                      }
+                      className="h-[320px] w-full object-cover sm:h-[360px]"
+                    />
                   </div>
 
-                  <span className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#d8d3ca] text-sm transition duration-300 group-hover:border-[#20201e] group-hover:bg-[#20201e] group-hover:text-white">
-                    →
-                  </span>
-                </div>
-              </button>
-            ))}
+                  <div className="mt-5 flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-xl font-medium">
+                        {
+                          style.name
+                        }
+                      </h2>
+
+                      <p className="mt-2 max-w-sm text-sm leading-6 text-gray-500">
+                        {
+                          style.description
+                        }
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              )
+            )}
           </div>
         </main>
 
         <SiteFooter
           onHome={goHome}
-          onExplore={openExplore}
-          onDesigns={openDesigns}
-          onStyles={() => setShowAllStyles(true)}
+          onExplore={
+            openExplore
+          }
+          onDesigns={
+            openDesigns
+          }
+          onStyles={() =>
+            setShowAllStyles(
+              true
+            )
+          }
           onShop={openShop}
-          onHow={() => goHome()}
+          onHow={goHome}
         />
       </div>
     );
@@ -342,8 +791,12 @@ function App() {
       <div className="page-enter">
         <ShopPage
           onBack={goHome}
-          onStartDesigning={startDesigning}
-          onExplore={openExplore}
+          onStartDesigning={
+            startDesigning
+          }
+          onExplore={
+            openExplore
+          }
         />
       </div>
     );
@@ -362,11 +815,16 @@ function App() {
               onClick={goHome}
               className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
             >
-              roomora<span className="text-[#9b8b72]">.</span>
+              roomora
+              <span className="text-[#9b8b72]">
+                .
+              </span>
             </button>
 
             <button
-              onClick={startDesigning}
+              onClick={
+                startDesigning
+              }
               className="roomora-button rounded-full bg-[#20201e] px-5 py-2.5 text-sm text-white"
             >
               + New design
@@ -389,7 +847,15 @@ function App() {
             </p>
           </div>
 
-          {savedDesigns.length === 0 ? (
+          {designsLoading ? (
+            <div className="mt-16 rounded-[2rem] border border-[#dedbd4] bg-white px-6 py-20 text-center">
+              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-[#d8d3ca] border-t-[#20201e]" />
+
+              <p className="mt-5 text-sm text-gray-500">
+                Loading your designs...
+              </p>
+            </div>
+          ) : savedDesigns.length === 0 ? (
             <div className="roomora-card mt-14 rounded-[2rem] border border-[#dedbd4] bg-white px-6 py-20 text-center md:mt-16">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#f1eee8] text-2xl">
                 +
@@ -400,74 +866,110 @@ function App() {
               </h2>
 
               <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-gray-500">
-                Start designing your room and save your favorite
-                ideas here.
+                Start designing your room and save your favorite ideas here.
               </p>
 
               <button
-                onClick={startDesigning}
+                onClick={
+                  startDesigning
+                }
                 className="roomora-button mt-7 rounded-full bg-[#20201e] px-7 py-3.5 text-sm text-white"
               >
-                Create your first design →
+                Create your first design
               </button>
             </div>
           ) : (
             <div className="mt-12 grid gap-7 sm:grid-cols-2 lg:grid-cols-3">
-              {savedDesigns.map((design) => (
-                <div
-                  key={design.id}
-                  className="roomora-card overflow-hidden rounded-[2rem] bg-white"
-                >
-                  <div className="image-zoom relative overflow-hidden">
-                    <img
-                      src={design.image}
-                      alt={`${design.style} room`}
-                      className="h-72 w-full object-cover md:h-80"
-                    />
+              {savedDesigns.map(
+                (design) => (
+                  <div
+                    key={
+                      design.id
+                    }
+                    className="roomora-card overflow-hidden rounded-[2rem] bg-white"
+                  >
+                    <div className="image-motion relative overflow-hidden">
+                      <img
+                        src={
+                          design.image
+                        }
+                        alt={`${design.style} room`}
+                        className="h-72 w-full object-cover md:h-80"
+                      />
 
-                    <button
-                      onClick={() => deleteDesign(design.id)}
-                      className="absolute right-4 top-4 rounded-full bg-white/90 px-4 py-2 text-xs text-gray-600 backdrop-blur transition hover:bg-white hover:text-red-500"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                      <button
+                        onClick={() =>
+                          deleteDesign(
+                            design.id
+                          )
+                        }
+                        className="absolute right-4 top-4 rounded-full bg-white/90 px-4 py-2 text-xs text-gray-600 backdrop-blur transition hover:bg-white hover:text-red-500"
+                      >
+                        Delete
+                      </button>
+                    </div>
 
-                  <div className="p-6">
-                    <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
-                      {design.style}
-                    </p>
+                    <div className="p-6">
+                      <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
+                        {
+                          design.style
+                        }
+                      </p>
 
-                    <h3 className="mt-2 text-xl font-medium">
-                      {design.style} Room
-                    </h3>
+                      <h3 className="mt-2 text-xl font-medium">
+                        {
+                          design.style
+                        }{" "}
+                        Room
+                      </h3>
 
-                    <div className="mt-4 flex flex-col gap-2 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
-                      <span>
-                        Budget: ₹{design.budget || "Not set"}
-                      </span>
+                      <div className="mt-4 flex flex-col gap-2 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
+                        <span>
+                          Budget: ₹
+                          {design.budget ||
+                            "Not set"}
+                        </span>
 
-                      <span>{design.createdAt}</span>
+                        <span>
+                          {
+                            design.createdAt
+                          }
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              )}
             </div>
           )}
         </main>
 
         <SiteFooter
           onHome={goHome}
-          onExplore={openExplore}
-          onDesigns={openDesigns}
-          onStyles={() => setShowAllStyles(true)}
+          onExplore={
+            openExplore
+          }
+          onDesigns={
+            openDesigns
+          }
+          onStyles={() =>
+            setShowAllStyles(
+              true
+            )
+          }
           onShop={openShop}
           onHow={() => {
             goHome();
+
             setTimeout(() => {
               document
-                .getElementById("how")
-                ?.scrollIntoView({ behavior: "smooth" });
+                .getElementById(
+                  "how"
+                )
+                ?.scrollIntoView({
+                  behavior:
+                    "smooth",
+                });
             }, 50);
           }}
         />
@@ -483,12 +985,24 @@ function App() {
     return (
       <div className="page-enter">
         <Designer
-          image={designerData.image}
-          imageFile={designerData.imageFile}
-          style={designerData.style}
-          budget={designerData.budget}
-          onSave={(design) => saveDesign(design)}
-          onBack={() => setDesignerData(null)}
+          image={
+            designerData.image
+          }
+          imageFile={
+            designerData.imageFile
+          }
+          style={
+            designerData.style
+          }
+          budget={
+            designerData.budget
+          }
+          onSave={(design) =>
+            saveDesign(design)
+          }
+          onBack={() =>
+            setDesignerData(null)
+          }
         />
       </div>
     );
@@ -502,8 +1016,14 @@ function App() {
     return (
       <div className="page-enter">
         <Design
-          selectedStyle={selectedStyle}
-          onContinue={(data) => setDesignerData(data)}
+          selectedStyle={
+            selectedStyle
+          }
+          onContinue={(data) =>
+            setDesignerData(
+              data
+            )
+          }
         />
       </div>
     );
@@ -522,12 +1042,17 @@ function App() {
           onClick={goHome}
           className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
         >
-          roomora<span className="text-[#9b8b72]">.</span>
+          roomora
+          <span className="text-[#9b8b72]">
+            .
+          </span>
         </button>
 
         <div className="hidden items-center gap-8 text-sm md:flex">
           <button
-            onClick={openExplore}
+            onClick={
+              openExplore
+            }
             className="transition hover:text-[#9b8b72]"
           >
             Explore
@@ -558,15 +1083,97 @@ function App() {
         {/* Auth + Start designing */}
 
         <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={openAuth}
-            className="roomora-button rounded-full border border-[#d8d3ca] bg-white px-4 py-2.5 text-sm font-medium sm:px-5"
-          >
-            Log in
-          </button>
+          {user ? (
+            <div className="relative">
+              <button
+                onClick={() =>
+                  setShowProfile(
+                    !showProfile
+                  )
+                }
+                className="flex items-center gap-2 rounded-full border border-[#d8d3ca] bg-white px-2.5 py-2 transition hover:bg-[#f1eee8] sm:px-3"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#20201e] text-xs font-medium text-white">
+                  {(
+                    user.displayName ||
+                    user.email ||
+                    "U"
+                  )
+                    .charAt(0)
+                    .toUpperCase()}
+                </span>
+
+                <span className="hidden max-w-[120px] truncate text-sm font-medium sm:block">
+                  {user.displayName ||
+                    "User"}
+                </span>
+
+                <span
+                  className={`text-xs text-gray-500 transition-transform ${showProfile
+                      ? "rotate-180"
+                      : ""
+                    }`}
+                >
+                  ▾
+                </span>
+              </button>
+
+              {showProfile && (
+                <div className="absolute right-0 top-14 z-50 w-64 overflow-hidden rounded-2xl border border-[#dedbd4] bg-white p-2 shadow-xl">
+                  <div className="px-4 py-3">
+                    <p className="font-medium text-[#20201e]">
+                      {user.displayName ||
+                        "Roomora User"}
+                    </p>
+
+                    <p className="mt-1 truncate text-xs text-gray-500">
+                      {
+                        user.email
+                      }
+                    </p>
+                  </div>
+
+                  <div className="my-1 border-t border-[#eeeae3]" />
+
+                  <button
+                    onClick={() => {
+                      setShowProfile(
+                        false
+                      );
+
+                      openDesigns();
+                    }}
+                    className="w-full rounded-xl px-4 py-2.5 text-left text-sm text-gray-600 transition hover:bg-[#f5f2ec] hover:text-[#20201e]"
+                  >
+                    My Designs
+                  </button>
+
+                  <button
+                    onClick={
+                      handleLogout
+                    }
+                    className="w-full rounded-xl px-4 py-2.5 text-left text-sm text-gray-600 transition hover:bg-red-50 hover:text-red-600"
+                  >
+                    Log out
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={
+                openAuth
+              }
+              className="roomora-button rounded-full border border-[#d8d3ca] bg-white px-4 py-2.5 text-sm font-medium sm:px-5"
+            >
+              Log in
+            </button>
+          )}
 
           <button
-            onClick={startDesigning}
+            onClick={
+              startDesigning
+            }
             className="roomora-button rounded-full bg-[#20201e] px-4 py-2.5 text-sm text-white sm:px-5"
           >
             Start designing
@@ -599,14 +1206,18 @@ function App() {
 
               <div className="mt-9 flex flex-wrap gap-3 sm:gap-4">
                 <button
-                  onClick={startDesigning}
+                  onClick={
+                    startDesigning
+                  }
                   className="roomora-button rounded-full bg-[#20201e] px-6 py-3.5 text-sm text-white sm:px-7"
                 >
-                  Start designing →
+                  Start designing
                 </button>
 
                 <button
-                  onClick={openDesigns}
+                  onClick={
+                    openDesigns
+                  }
                   className="roomora-button rounded-full border border-gray-300 px-6 py-3.5 text-sm sm:px-7"
                 >
                   My designs
@@ -617,7 +1228,7 @@ function App() {
             {/* Hero Image */}
 
             <div className="relative">
-              <div className="image-zoom overflow-hidden rounded-[2rem]">
+              <div className="hero-motion image-motion overflow-hidden rounded-[2rem]">
                 <img
                   src="https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=85"
                   alt="Modern interior"
@@ -655,17 +1266,26 @@ function App() {
           </h2>
 
           <div className="mt-12 grid gap-5 md:mt-16 md:grid-cols-3">
-            <Step number="01" title="Show us your room">
+            <Step
+              number="01"
+              title="Show us your room"
+            >
               Upload a photo of your room and tell Roomora
               what you want to change.
             </Step>
 
-            <Step number="02" title="Chat with Roomora">
+            <Step
+              number="02"
+              title="Chat with Roomora"
+            >
               Talk naturally with your AI designer about
               colors, layouts, furniture and your budget.
             </Step>
 
-            <Step number="03" title="Make it yours">
+            <Step
+              number="03"
+              title="Make it yours"
+            >
               Discover furniture and decor that fit your
               style and your budget.
             </Step>
@@ -692,10 +1312,14 @@ function App() {
             </div>
 
             <button
-              onClick={() => setShowAllStyles(true)}
+              onClick={() =>
+                setShowAllStyles(
+                  true
+                )
+              }
               className="w-fit text-sm underline underline-offset-4 transition hover:text-[#9b8b72]"
             >
-              Explore all styles →
+              Explore all styles
             </button>
           </div>
 
@@ -703,25 +1327,41 @@ function App() {
             <StyleCard
               image="https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=700&q=80"
               title="Minimal"
-              onClick={() => chooseStyle("Minimal")}
+              onClick={() =>
+                chooseStyle(
+                  "Minimal"
+                )
+              }
             />
 
             <StyleCard
               image="https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=700&q=80"
               title="Japandi"
-              onClick={() => chooseStyle("Japandi")}
+              onClick={() =>
+                chooseStyle(
+                  "Japandi"
+                )
+              }
             />
 
             <StyleCard
               image="https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=700&q=80"
               title="Modern"
-              onClick={() => chooseStyle("Modern")}
+              onClick={() =>
+                chooseStyle(
+                  "Modern"
+                )
+              }
             />
 
             <StyleCard
               image="https://images.unsplash.com/photo-1617104678098-de229db51175?auto=format&fit=crop&w=700&q=80"
               title="Warm"
-              onClick={() => chooseStyle("Warm")}
+              onClick={() =>
+                chooseStyle(
+                  "Warm"
+                )
+              }
             />
           </div>
         </div>
@@ -746,10 +1386,12 @@ function App() {
             </p>
 
             <button
-              onClick={startDesigning}
+              onClick={
+                startDesigning
+              }
               className="roomora-button mt-8 rounded-full bg-[#20201e] px-7 py-3.5 text-sm text-white"
             >
-              Chat with Roomora →
+              Chat with Roomora
             </button>
           </div>
         </div>
@@ -779,10 +1421,12 @@ function App() {
             </div>
 
             <button
-              onClick={openShop}
+              onClick={
+                openShop
+              }
               className="w-fit text-sm underline underline-offset-4 transition hover:text-[#9b8b72]"
             >
-              View all products →
+              View all products
             </button>
           </div>
 
@@ -792,7 +1436,9 @@ function App() {
               category="Furniture"
               title="Lounge Chair"
               price="₹8,999"
-              onClick={openShop}
+              onClick={
+                openShop
+              }
             />
 
             <ShopCard
@@ -800,7 +1446,9 @@ function App() {
               category="Lighting"
               title="Modern Lamp"
               price="₹2,499"
-              onClick={openShop}
+              onClick={
+                openShop
+              }
             />
 
             <ShopCard
@@ -808,7 +1456,9 @@ function App() {
               category="Decor"
               title="Minimal Workspace"
               price="₹6,499"
-              onClick={openShop}
+              onClick={
+                openShop
+              }
             />
 
             <ShopCard
@@ -816,7 +1466,9 @@ function App() {
               category="Furniture"
               title="Accent Table"
               price="₹4,299"
-              onClick={openShop}
+              onClick={
+                openShop
+              }
             />
           </div>
         </div>
@@ -826,14 +1478,27 @@ function App() {
 
       <SiteFooter
         onHome={goHome}
-        onExplore={openExplore}
-        onDesigns={openDesigns}
-        onStyles={() => setShowAllStyles(true)}
+        onExplore={
+          openExplore
+        }
+        onDesigns={
+          openDesigns
+        }
+        onStyles={() =>
+          setShowAllStyles(
+            true
+          )
+        }
         onShop={openShop}
         onHow={() => {
           document
-            .getElementById("how")
-            ?.scrollIntoView({ behavior: "smooth" });
+            .getElementById(
+              "how"
+            )
+            ?.scrollIntoView({
+              behavior:
+                "smooth",
+            });
         }}
       />
     </div>
@@ -841,12 +1506,18 @@ function App() {
 }
 
 // -------------------------
-// EXPLORE / INSPIRATION PAGE
+// EXPLORE PAGE
 // -------------------------
 
-function ExplorePage({ onBack, onChooseStyle }) {
-  const [styleFilter, setStyleFilter] = useState("All");
-  const [roomFilter, setRoomFilter] = useState("All");
+function ExplorePage({
+  onBack,
+  onChooseStyle,
+}) {
+  const [styleFilter, setStyleFilter] =
+    useState("All");
+
+  const [roomFilter, setRoomFilter] =
+    useState("All");
 
   const inspirations = [
     {
@@ -951,31 +1622,46 @@ function ExplorePage({ onBack, onChooseStyle }) {
     "Dining Room",
   ];
 
-  const filteredInspirations = inspirations.filter((item) => {
-    const matchesStyle =
-      styleFilter === "All" || item.style === styleFilter;
+  const filteredInspirations =
+    inspirations.filter(
+      (item) => {
+        const matchesStyle =
+          styleFilter === "All" ||
+          item.style === styleFilter;
 
-    const matchesRoom =
-      roomFilter === "All" || item.room === roomFilter;
+        const matchesRoom =
+          roomFilter === "All" ||
+          item.room === roomFilter;
 
-    return matchesStyle && matchesRoom;
-  });
+        return (
+          matchesStyle &&
+          matchesRoom
+        );
+      }
+    );
 
   return (
     <div className="min-h-screen bg-[#f7f5f0]">
-      {/* Header */}
-
       <header className="border-b border-[#dedbd4] px-5 py-5 sm:px-6 md:px-10">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
           <button
-            onClick={onBack}
+            onClick={
+              onBack
+            }
             className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
           >
-            roomora<span className="text-[#9b8b72]">.</span>
+            roomora
+            <span className="text-[#9b8b72]">
+              .
+            </span>
           </button>
 
           <button
-            onClick={() => onChooseStyle("Modern")}
+            onClick={() =>
+              onChooseStyle(
+                "Modern"
+              )
+            }
             className="roomora-button rounded-full bg-[#20201e] px-5 py-2.5 text-sm text-white"
           >
             Start designing
@@ -983,15 +1669,15 @@ function ExplorePage({ onBack, onChooseStyle }) {
         </div>
       </header>
 
-      {/* Hero */}
-
       <section className="px-5 pb-14 pt-12 sm:px-6 md:px-10 md:pb-20 md:pt-20">
         <div className="mx-auto max-w-7xl">
           <button
-            onClick={onBack}
+            onClick={
+              onBack
+            }
             className="mb-8 text-sm text-gray-500 transition hover:text-[#20201e]"
           >
-            ← Back to home
+            Back to home
           </button>
 
           <p className="text-xs uppercase tracking-[0.25em] text-[#9b8b72]">
@@ -1009,8 +1695,6 @@ function ExplorePage({ onBack, onChooseStyle }) {
         </div>
       </section>
 
-      {/* Filters */}
-
       <section className="border-y border-[#dedbd4] bg-[#f3f0ea] px-5 py-5 sm:px-6 md:px-10">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
@@ -1020,19 +1704,25 @@ function ExplorePage({ onBack, onChooseStyle }) {
               </p>
 
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {styles.map((style) => (
-                  <button
-                    key={style}
-                    onClick={() => setStyleFilter(style)}
-                    className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${
-                      styleFilter === style
-                        ? "bg-[#20201e] text-white"
-                        : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
-                    }`}
-                  >
-                    {style}
-                  </button>
-                ))}
+                {styles.map(
+                  (style) => (
+                    <button
+                      key={style}
+                      onClick={() =>
+                        setStyleFilter(
+                          style
+                        )
+                      }
+                      className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${styleFilter ===
+                          style
+                          ? "bg-[#20201e] text-white"
+                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
+                        }`}
+                    >
+                      {style}
+                    </button>
+                  )
+                )}
               </div>
             </div>
 
@@ -1042,31 +1732,38 @@ function ExplorePage({ onBack, onChooseStyle }) {
               </p>
 
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {rooms.map((room) => (
-                  <button
-                    key={room}
-                    onClick={() => setRoomFilter(room)}
-                    className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${
-                      roomFilter === room
-                        ? "bg-[#20201e] text-white"
-                        : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
-                    }`}
-                  >
-                    {room}
-                  </button>
-                ))}
+                {rooms.map(
+                  (room) => (
+                    <button
+                      key={room}
+                      onClick={() =>
+                        setRoomFilter(
+                          room
+                        )
+                      }
+                      className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${roomFilter ===
+                          room
+                          ? "bg-[#20201e] text-white"
+                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
+                        }`}
+                    >
+                      {room}
+                    </button>
+                  )
+                )}
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Inspiration Gallery */}
-
       <main className="mx-auto max-w-7xl px-5 py-12 sm:px-6 md:px-10 md:py-20">
         <div className="mb-10">
           <p className="text-sm text-gray-500">
-            {filteredInspirations.length} inspirations
+            {
+              filteredInspirations.length
+            }{" "}
+            inspirations
           </p>
 
           <h2 className="mt-2 text-3xl font-medium md:text-4xl">
@@ -1074,7 +1771,8 @@ function ExplorePage({ onBack, onChooseStyle }) {
           </h2>
         </div>
 
-        {filteredInspirations.length === 0 ? (
+        {filteredInspirations.length ===
+          0 ? (
           <div className="roomora-card rounded-[2rem] border border-[#dedbd4] bg-white px-6 py-20 text-center">
             <h2 className="text-2xl font-medium">
               No inspiration found
@@ -1086,8 +1784,12 @@ function ExplorePage({ onBack, onChooseStyle }) {
 
             <button
               onClick={() => {
-                setStyleFilter("All");
-                setRoomFilter("All");
+                setStyleFilter(
+                  "All"
+                );
+                setRoomFilter(
+                  "All"
+                );
               }}
               className="roomora-button mt-7 rounded-full bg-[#20201e] px-6 py-3 text-sm text-white"
             >
@@ -1096,53 +1798,74 @@ function ExplorePage({ onBack, onChooseStyle }) {
           </div>
         ) : (
           <div className="grid gap-x-6 gap-y-14 md:grid-cols-2">
-            {filteredInspirations.map((item) => (
-              <div key={item.id} className="group">
-                <div className="image-zoom relative overflow-hidden rounded-[2rem] bg-white">
-                  <img
-                    src={item.image}
-                    alt={item.title}
-                    className="h-[380px] w-full object-cover sm:h-[450px] md:h-[500px]"
-                  />
+            {filteredInspirations.map(
+              (item) => (
+                <div
+                  key={
+                    item.id
+                  }
+                  className="group"
+                >
+                  <div className="image-motion relative overflow-hidden rounded-[2rem] bg-white">
+                    <img
+                      src={
+                        item.image
+                      }
+                      alt={
+                        item.title
+                      }
+                      className="h-[380px] w-full object-cover sm:h-[450px] md:h-[500px]"
+                    />
 
-                  <div className="absolute left-5 top-5">
-                    <span className="rounded-full bg-white/90 px-4 py-2 text-xs text-gray-600 backdrop-blur">
-                      {item.style}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
-                        {item.room}
-                      </p>
-
-                      <h3 className="mt-2 text-2xl font-medium">
-                        {item.title}
-                      </h3>
-
-                      <p className="mt-2 max-w-lg text-sm leading-6 text-gray-500">
-                        {item.description}
-                      </p>
+                    <div className="absolute left-5 top-5">
+                      <span className="rounded-full bg-white/90 px-4 py-2 text-xs text-gray-600 backdrop-blur">
+                        {
+                          item.style
+                        }
+                      </span>
                     </div>
+                  </div>
 
-                    <button
-                      onClick={() => onChooseStyle(item.style)}
-                      className="roomora-button shrink-0 self-start rounded-full bg-[#20201e] px-5 py-3 text-xs text-white"
-                    >
-                      Create this style →
-                    </button>
+                  <div className="mt-5">
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
+                          {
+                            item.room
+                          }
+                        </p>
+
+                        <h3 className="mt-2 text-2xl font-medium">
+                          {
+                            item.title
+                          }
+                        </h3>
+
+                        <p className="mt-2 max-w-lg text-sm leading-6 text-gray-500">
+                          {
+                            item.description
+                          }
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() =>
+                          onChooseStyle(
+                            item.style
+                          )
+                        }
+                        className="roomora-button shrink-0 self-start rounded-full bg-[#20201e] px-5 py-3 text-xs text-white"
+                      >
+                        Create this style
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            )}
           </div>
         )}
       </main>
-
-      {/* CTA */}
 
       <section className="px-5 pb-20 sm:px-6 md:px-10">
         <div className="mx-auto max-w-7xl overflow-hidden rounded-[2rem] bg-[#e8e2d7] px-7 py-14 sm:px-8 md:px-16 md:py-20">
@@ -1162,12 +1885,15 @@ function ExplorePage({ onBack, onChooseStyle }) {
           <button
             onClick={() =>
               onChooseStyle(
-                styleFilter === "All" ? "Modern" : styleFilter
+                styleFilter ===
+                  "All"
+                  ? "Modern"
+                  : styleFilter
               )
             }
             className="roomora-button mt-8 rounded-full bg-[#20201e] px-7 py-3.5 text-sm text-white"
           >
-            Start with this inspiration →
+            Start with this inspiration
           </button>
         </div>
       </section>
@@ -1175,9 +1901,9 @@ function ExplorePage({ onBack, onChooseStyle }) {
       <SiteFooter
         onHome={onBack}
         onExplore={onBack}
-        onDesigns={() => {}}
-        onStyles={() => {}}
-        onShop={() => {}}
+        onDesigns={() => { }}
+        onStyles={() => { }}
+        onShop={() => { }}
         onHow={onBack}
       />
     </div>
@@ -1185,13 +1911,21 @@ function ExplorePage({ onBack, onChooseStyle }) {
 }
 
 // -------------------------
-// SHOP PAGE COMPONENT
+// SHOP PAGE
 // -------------------------
 
-function ShopPage({ onBack, onStartDesigning }) {
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("All");
-  const [style, setStyle] = useState("All");
+function ShopPage({
+  onBack,
+  onStartDesigning,
+}) {
+  const [search, setSearch] =
+    useState("");
+
+  const [category, setCategory] =
+    useState("All");
+
+  const [style, setStyle] =
+    useState("All");
 
   const products = [
     {
@@ -1328,35 +2062,57 @@ function ShopPage({ onBack, onStartDesigning }) {
     "Dark Academia",
   ];
 
-  const filteredProducts = products.filter((product) => {
-    const matchesSearch =
-      product.name.toLowerCase().includes(search.toLowerCase()) ||
-      product.category.toLowerCase().includes(search.toLowerCase());
+  const filteredProducts =
+    products.filter(
+      (product) => {
+        const matchesSearch =
+          product.name
+            .toLowerCase()
+            .includes(
+              search.toLowerCase()
+            ) ||
+          product.category
+            .toLowerCase()
+            .includes(
+              search.toLowerCase()
+            );
 
-    const matchesCategory =
-      category === "All" || product.category === category;
+        const matchesCategory =
+          category === "All" ||
+          product.category ===
+          category;
 
-    const matchesStyle =
-      style === "All" || product.style === style;
+        const matchesStyle =
+          style === "All" ||
+          product.style ===
+          style;
 
-    return matchesSearch && matchesCategory && matchesStyle;
-  });
+        return (
+          matchesSearch &&
+          matchesCategory &&
+          matchesStyle
+        );
+      }
+    );
 
   return (
     <div className="min-h-screen bg-[#f7f5f0]">
-      {/* Header */}
-
       <header className="border-b border-[#dedbd4] px-5 py-5 sm:px-6 md:px-10">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
           <button
             onClick={onBack}
             className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
           >
-            roomora<span className="text-[#9b8b72]">.</span>
+            roomora
+            <span className="text-[#9b8b72]">
+              .
+            </span>
           </button>
 
           <button
-            onClick={onStartDesigning}
+            onClick={
+              onStartDesigning
+            }
             className="roomora-button rounded-full bg-[#20201e] px-5 py-2.5 text-sm text-white"
           >
             Start designing
@@ -1364,15 +2120,13 @@ function ShopPage({ onBack, onStartDesigning }) {
         </div>
       </header>
 
-      {/* Shop Hero */}
-
       <section className="px-5 pb-12 pt-12 sm:px-6 md:px-10 md:pb-16 md:pt-20">
         <div className="mx-auto max-w-7xl">
           <button
             onClick={onBack}
             className="mb-8 text-sm text-gray-500 transition hover:text-[#20201e]"
           >
-            ← Back to home
+            Back to home
           </button>
 
           <p className="text-xs uppercase tracking-[0.25em] text-[#9b8b72]">
@@ -1388,8 +2142,6 @@ function ShopPage({ onBack, onStartDesigning }) {
             complement different interior styles.
           </p>
 
-          {/* Search */}
-
           <div className="mt-10 max-w-2xl">
             <div className="flex items-center rounded-full border border-[#d8d3ca] bg-white px-5 py-4 transition focus-within:border-[#9b8b72]">
               <span className="mr-3 text-lg text-gray-400">
@@ -1399,7 +2151,11 @@ function ShopPage({ onBack, onStartDesigning }) {
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) =>
+                  setSearch(
+                    e.target.value
+                  )
+                }
                 placeholder="Search furniture, lighting, decor..."
                 className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400"
               />
@@ -1407,8 +2163,6 @@ function ShopPage({ onBack, onStartDesigning }) {
           </div>
         </div>
       </section>
-
-      {/* Filters */}
 
       <section className="border-y border-[#dedbd4] bg-[#f3f0ea] px-5 py-5 sm:px-6 md:px-10">
         <div className="mx-auto max-w-7xl">
@@ -1419,19 +2173,25 @@ function ShopPage({ onBack, onStartDesigning }) {
               </p>
 
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {categories.map((item) => (
-                  <button
-                    key={item}
-                    onClick={() => setCategory(item)}
-                    className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${
-                      category === item
-                        ? "bg-[#20201e] text-white"
-                        : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
-                    }`}
-                  >
-                    {item}
-                  </button>
-                ))}
+                {categories.map(
+                  (item) => (
+                    <button
+                      key={item}
+                      onClick={() =>
+                        setCategory(
+                          item
+                        )
+                      }
+                      className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${category ===
+                          item
+                          ? "bg-[#20201e] text-white"
+                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
+                        }`}
+                    >
+                      {item}
+                    </button>
+                  )
+                )}
               </div>
             </div>
 
@@ -1442,26 +2202,39 @@ function ShopPage({ onBack, onStartDesigning }) {
 
               <select
                 value={style}
-                onChange={(e) => setStyle(e.target.value)}
+                onChange={(e) =>
+                  setStyle(
+                    e.target.value
+                  )
+                }
                 className="rounded-full border border-[#d8d3ca] bg-white px-5 py-2.5 text-sm outline-none transition focus:border-[#9b8b72]"
               >
-                {styles.map((item) => (
-                  <option key={item} value={item}>
-                    {item === "All" ? "All styles" : item}
-                  </option>
-                ))}
+                {styles.map(
+                  (item) => (
+                    <option
+                      key={item}
+                      value={item}
+                    >
+                      {item ===
+                        "All"
+                        ? "All styles"
+                        : item}
+                    </option>
+                  )
+                )}
               </select>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Products */}
-
       <main className="mx-auto max-w-7xl px-5 py-12 sm:px-6 md:px-10 md:py-16">
         <div className="mb-8">
           <p className="text-sm text-gray-500">
-            {filteredProducts.length} products
+            {
+              filteredProducts.length
+            }{" "}
+            products
           </p>
 
           <h2 className="mt-1 text-2xl font-medium">
@@ -1469,7 +2242,8 @@ function ShopPage({ onBack, onStartDesigning }) {
           </h2>
         </div>
 
-        {filteredProducts.length === 0 ? (
+        {filteredProducts.length ===
+          0 ? (
           <div className="roomora-card rounded-[2rem] border border-[#dedbd4] bg-white px-6 py-20 text-center">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#f1eee8] text-2xl">
               ⌕
@@ -1486,9 +2260,17 @@ function ShopPage({ onBack, onStartDesigning }) {
 
             <button
               onClick={() => {
-                setSearch("");
-                setCategory("All");
-                setStyle("All");
+                setSearch(
+                  ""
+                );
+
+                setCategory(
+                  "All"
+                );
+
+                setStyle(
+                  "All"
+                );
               }}
               className="roomora-button mt-7 rounded-full bg-[#20201e] px-6 py-3 text-sm text-white"
             >
@@ -1497,17 +2279,21 @@ function ShopPage({ onBack, onStartDesigning }) {
           </div>
         ) : (
           <div className="grid gap-x-6 gap-y-12 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filteredProducts.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-              />
-            ))}
+            {filteredProducts.map(
+              (product) => (
+                <ProductCard
+                  key={
+                    product.id
+                  }
+                  product={
+                    product
+                  }
+                />
+              )
+            )}
           </div>
         )}
       </main>
-
-      {/* Shop CTA */}
 
       <section className="px-5 pb-20 sm:px-6 md:px-10">
         <div className="mx-auto max-w-7xl overflow-hidden rounded-[2rem] bg-[#20201e] px-7 py-14 text-white sm:px-8 md:px-16 md:py-20">
@@ -1525,19 +2311,21 @@ function ShopPage({ onBack, onStartDesigning }) {
           </p>
 
           <button
-            onClick={onStartDesigning}
+            onClick={
+              onStartDesigning
+            }
             className="roomora-button mt-8 rounded-full bg-white px-7 py-3.5 text-sm text-[#20201e]"
           >
-            Start designing →
+            Start designing
           </button>
         </div>
       </section>
 
       <SiteFooter
         onHome={onBack}
-        onExplore={() => {}}
-        onDesigns={() => {}}
-        onStyles={() => {}}
+        onExplore={() => { }}
+        onDesigns={() => { }}
+        onStyles={() => { }}
         onShop={onBack}
         onHow={onBack}
       />
@@ -1549,7 +2337,9 @@ function ShopPage({ onBack, onStartDesigning }) {
 // PRODUCT CARD
 // -------------------------
 
-function ProductCard({ product }) {
+function ProductCard({
+  product,
+}) {
   function handleProductClick() {
     alert(
       `${product.name}\n\n${product.style} style\n₹${product.price.toLocaleString(
@@ -1560,7 +2350,7 @@ function ProductCard({ product }) {
 
   return (
     <div className="group">
-      <div className="image-zoom relative overflow-hidden rounded-[1.75rem] bg-white">
+      <div className="image-motion relative overflow-hidden rounded-[1.75rem] bg-white">
         <img
           src={product.image}
           alt={product.name}
@@ -1569,29 +2359,40 @@ function ProductCard({ product }) {
 
         <div className="absolute left-4 top-4">
           <span className="rounded-full bg-white/90 px-3 py-1.5 text-xs text-gray-600 backdrop-blur">
-            {product.style}
+            {
+              product.style
+            }
           </span>
         </div>
       </div>
 
       <div className="mt-5">
         <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
-          {product.category}
+          {
+            product.category
+          }
         </p>
 
         <div className="mt-2 flex items-start justify-between gap-4">
           <div>
             <h3 className="text-lg font-medium">
-              {product.name}
+              {
+                product.name
+              }
             </h3>
 
             <p className="mt-1 text-sm text-gray-500">
-              ₹{product.price.toLocaleString("en-IN")}
+              ₹
+              {product.price.toLocaleString(
+                "en-IN"
+              )}
             </p>
           </div>
 
           <button
-            onClick={handleProductClick}
+            onClick={
+              handleProductClick
+            }
             className="roomora-button rounded-full border border-[#d8d3ca] px-4 py-2 text-xs"
           >
             View product
@@ -1603,22 +2404,32 @@ function ProductCard({ product }) {
 }
 
 // -------------------------
-// STEP COMPONENT
+// STEP
 // -------------------------
 
-function Step({ number, title, children }) {
+function Step({
+  number,
+  title,
+  children,
+}) {
   return (
     <div className="roomora-card rounded-3xl border border-white/10 p-7 md:p-8">
       <span className="text-sm text-gray-500">
-        {number}
+        {
+          number
+        }
       </span>
 
       <h3 className="mt-10 text-2xl md:mt-12">
-        {title}
+        {
+          title
+        }
       </h3>
 
       <p className="mt-4 leading-7 text-gray-400">
-        {children}
+        {
+          children
+        }
       </p>
     </div>
   );
@@ -1628,13 +2439,17 @@ function Step({ number, title, children }) {
 // STYLE CARD
 // -------------------------
 
-function StyleCard({ image, title, onClick }) {
+function StyleCard({
+  image,
+  title,
+  onClick,
+}) {
   return (
     <button
       onClick={onClick}
       className="roomora-card group w-full text-left"
     >
-      <div className="image-zoom overflow-hidden rounded-3xl">
+      <div className="image-motion overflow-hidden rounded-3xl">
         <img
           src={image}
           alt={title}
@@ -1643,18 +2458,18 @@ function StyleCard({ image, title, onClick }) {
       </div>
 
       <div className="mt-4 flex items-center justify-between">
-        <p className="text-lg">{title}</p>
-
-        <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d8d3ca] text-sm transition group-hover:bg-[#20201e] group-hover:text-white">
-          →
-        </span>
+        <p className="text-lg">
+          {
+            title
+          }
+        </p>
       </div>
     </button>
   );
 }
 
 // -------------------------
-// HOMEPAGE SHOP CARD
+// SHOP CARD
 // -------------------------
 
 function ShopCard({
@@ -1669,7 +2484,7 @@ function ShopCard({
       onClick={onClick}
       className="roomora-card group w-full text-left"
     >
-      <div className="image-zoom overflow-hidden rounded-3xl bg-white">
+      <div className="image-motion overflow-hidden rounded-3xl bg-white">
         <img
           src={image}
           alt={title}
@@ -1678,14 +2493,22 @@ function ShopCard({
       </div>
 
       <p className="mt-4 text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
-        {category}
+        {
+          category
+        }
       </p>
 
       <div className="mt-1 flex items-center justify-between gap-3">
-        <p className="text-lg">{title}</p>
+        <p className="text-lg">
+          {
+            title
+          }
+        </p>
 
         <p className="text-sm text-gray-500">
-          {price}
+          {
+            price
+          }
         </p>
       </div>
     </button>
@@ -1708,14 +2531,17 @@ function SiteFooter({
     <footer className="border-t border-[#e4dfd7] bg-[#efede7]">
       <div className="mx-auto max-w-7xl px-5 py-12 sm:px-6 md:px-10 md:py-14">
         <div className="grid gap-10 md:grid-cols-4 md:gap-12">
-          {/* Brand */}
-
           <div className="md:col-span-2">
             <button
-              onClick={onHome}
+              onClick={
+                onHome
+              }
               className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
             >
-              roomora<span className="text-[#9b8b72]">.</span>
+              roomora
+              <span className="text-[#9b8b72]">
+                .
+              </span>
             </button>
 
             <p className="mt-4 max-w-sm text-sm leading-6 text-[#777269]">
@@ -1728,8 +2554,6 @@ function SiteFooter({
             </p>
           </div>
 
-          {/* Explore */}
-
           <div>
             <h3 className="text-sm font-semibold text-[#24231f]">
               Explore
@@ -1737,36 +2561,42 @@ function SiteFooter({
 
             <div className="mt-5 flex flex-col gap-3 text-sm text-[#777269]">
               <button
-                onClick={onHome}
+                onClick={
+                  onHome
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 Home
               </button>
 
               <button
-                onClick={onExplore}
+                onClick={
+                  onExplore
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 Designs
               </button>
 
               <button
-                onClick={onStyles}
+                onClick={
+                  onStyles
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 Styles
               </button>
 
               <button
-                onClick={onShop}
+                onClick={
+                  onShop
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 Shop
               </button>
             </div>
           </div>
-
-          {/* Roomora */}
 
           <div>
             <h3 className="text-sm font-semibold text-[#24231f]">
@@ -1775,14 +2605,18 @@ function SiteFooter({
 
             <div className="mt-5 flex flex-col gap-3 text-sm text-[#777269]">
               <button
-                onClick={onHow}
+                onClick={
+                  onHow
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 How it works
               </button>
 
               <button
-                onClick={onHome}
+                onClick={
+                  onHome
+                }
                 className="w-fit transition hover:text-[#24231f]"
               >
                 About
@@ -1790,7 +2624,9 @@ function SiteFooter({
 
               <button
                 onClick={() =>
-                  alert("Contact page will be connected later.")
+                  alert(
+                    "Contact page will be connected later."
+                  )
                 }
                 className="w-fit transition hover:text-[#24231f]"
               >
@@ -1799,7 +2635,9 @@ function SiteFooter({
 
               <button
                 onClick={() =>
-                  alert("Privacy page will be connected later.")
+                  alert(
+                    "Privacy page will be connected later."
+                  )
                 }
                 className="w-fit transition hover:text-[#24231f]"
               >
@@ -1809,14 +2647,16 @@ function SiteFooter({
           </div>
         </div>
 
-        {/* Bottom */}
-
         <div className="mt-12 flex flex-col gap-3 border-t border-[#ddd8cf] pt-6 text-xs text-[#8a847b] sm:flex-row sm:items-center sm:justify-between md:mt-14">
           <p>
-            © {new Date().getFullYear()} Roomora. All rights reserved.
+            ©{" "}
+            {new Date().getFullYear()}{" "}
+            Roomora. All rights reserved.
           </p>
 
-          <p>Designed for better spaces.</p>
+          <p>
+            Designed for better spaces.
+          </p>
         </div>
       </div>
     </footer>
