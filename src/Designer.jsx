@@ -45,23 +45,150 @@ function Designer({
     ];
 
     // -------------------------
-    // FILE TO BASE64
+    // PREPARE IMAGE FOR AI
+    // Compress the image before sending it to the backend.
+    // This avoids sending very large phone photos.
     // -------------------------
 
-    function fileToBase64(file) {
+    function fileToBase64(
+        file,
+        maxSize = 1600,
+        quality = 0.75
+    ) {
         return new Promise((resolve, reject) => {
+            if (!file) {
+                reject(new Error("No image file was provided."));
+                return;
+            }
+
             const reader = new FileReader();
 
-            reader.readAsDataURL(file);
-
             reader.onload = () => {
-                resolve(reader.result);
+                const originalDataUrl = reader.result;
+                const img = new Image();
+
+                img.onload = () => {
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (
+                        width > maxSize ||
+                        height > maxSize
+                    ) {
+                        if (width > height) {
+                            height =
+                                (height / width) *
+                                maxSize;
+                            width = maxSize;
+                        } else {
+                            width =
+                                (width / height) *
+                                maxSize;
+                            height = maxSize;
+                        }
+                    }
+
+                    const canvas =
+                        document.createElement("canvas");
+
+                    canvas.width = Math.round(width);
+                    canvas.height = Math.round(height);
+
+                    const context =
+                        canvas.getContext("2d");
+
+                    if (!context) {
+                        reject(
+                            new Error(
+                                "Could not process the room image."
+                            )
+                        );
+                        return;
+                    }
+
+                    context.drawImage(
+                        img,
+                        0,
+                        0,
+                        canvas.width,
+                        canvas.height
+                    );
+
+                    const compressedImage =
+                        canvas.toDataURL(
+                            "image/jpeg",
+                            quality
+                        );
+
+                    resolve(compressedImage);
+                };
+
+                img.onerror = () => {
+                    // Fall back to the original image if the
+                    // browser cannot decode the file.
+                    resolve(originalDataUrl);
+                };
+
+                img.src = originalDataUrl;
             };
 
-            reader.onerror = (error) => {
-                reject(error);
+            reader.onerror = () => {
+                reject(
+                    new Error(
+                        "Could not read the room image."
+                    )
+                );
             };
+
+            reader.readAsDataURL(file);
         });
+    }
+
+    // Convert an image URL (including a blob URL) into
+    // a File object when imageFile is unavailable.
+    async function imageUrlToFile(imageUrl) {
+        if (!imageUrl) {
+            throw new Error("No room image is available.");
+        }
+
+        const response = await fetch(imageUrl);
+
+        if (!response.ok) {
+            throw new Error(
+                "Could not load the room image."
+            );
+        }
+
+        const blob = await response.blob();
+
+        return new File(
+            [blob],
+            "roomora-room-image.jpg",
+            {
+                type: blob.type || "image/jpeg",
+            }
+        );
+    }
+
+    // Always return a compressed image for the AI request.
+    async function getAIImageData() {
+        const file =
+            imageFile ||
+            (image
+                ? await imageUrlToFile(image)
+                : null);
+
+        if (!file) {
+            throw new Error(
+                "Please upload a room photo first."
+            );
+        }
+
+        return await fileToBase64(
+            file,
+            1600,
+            0.75
+        );
     }
 
     // -------------------------
@@ -207,12 +334,15 @@ function Designer({
         setLoading(true);
 
         try {
-            let imageData = null;
+            // Prepare a smaller image before sending it.
+            const imageData =
+                await getAIImageData();
 
-            if (imageFile) {
-                imageData =
-                    await fileToBase64(imageFile);
-            }
+            console.log(
+                "Roomora AI image prepared:",
+                Math.round(imageData.length / 1024),
+                "KB"
+            );
 
             const response = await fetch(
                 "http://localhost:5000/api/chat",
@@ -238,8 +368,15 @@ function Designer({
 
             if (!response.ok) {
                 throw new Error(
+                    data.details ||
                     data.error ||
-                        "Something went wrong"
+                    "Roomora AI request failed."
+                );
+            }
+
+            if (!data.reply) {
+                throw new Error(
+                    "Roomora AI returned an empty response."
                 );
             }
 
@@ -247,20 +384,22 @@ function Designer({
                 ...prev,
                 {
                     role: "assistant",
-                    content:
-                        data.reply ||
-                        "I couldn't generate a response right now.",
+                    content: data.reply,
                 },
             ]);
         } catch (error) {
-            console.error(error);
+            console.error(
+                "ROOMORA CHAT ERROR:",
+                error
+            );
 
             setMessages((prev) => [
                 ...prev,
                 {
                     role: "assistant",
                     content:
-                        "I couldn't connect to Roomora AI right now. Please try again when the AI service is running.",
+                        error.message ||
+                        "Could not connect to Roomora AI.",
                 },
             ]);
         } finally {
@@ -283,8 +422,24 @@ function Designer({
         setGenerating(true);
 
         try {
+            const file =
+                imageFile ||
+                (image
+                    ? await imageUrlToFile(image)
+                    : null);
+
+            if (!file) {
+                throw new Error(
+                    "Please upload a room photo first."
+                );
+            }
+
             const imageData =
-                await fileToBase64(imageFile);
+                await fileToBase64(
+                    file,
+                    2000,
+                    0.82
+                );
 
             const response = await fetch(
                 "http://localhost:5000/api/generate-room",
@@ -310,7 +465,7 @@ function Designer({
             if (!response.ok) {
                 throw new Error(
                     data.error ||
-                        "Unable to generate room"
+                    "Unable to generate room"
                 );
             }
 
@@ -318,10 +473,14 @@ function Designer({
                 data.image
             );
         } catch (error) {
-            console.error(error);
+            console.error(
+                "ROOM GENERATION ERROR:",
+                error
+            );
 
             alert(
-                "Room generation is not available yet. The AI chat can still be used."
+                error.message ||
+                "Room generation failed."
             );
         } finally {
             setGenerating(false);
@@ -493,20 +652,18 @@ function Designer({
                                 (msg, index) => (
                                     <div
                                         key={index}
-                                        className={`flex ${
-                                            msg.role ===
-                                            "user"
+                                        className={`flex ${msg.role ===
+                                                "user"
                                                 ? "justify-end"
                                                 : "justify-start"
-                                        }`}
+                                            }`}
                                     >
                                         <div
-                                            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
-                                                msg.role ===
-                                                "user"
+                                            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${msg.role ===
+                                                    "user"
                                                     ? "rounded-br-md bg-[#20201e] text-white"
                                                     : "rounded-bl-md bg-[#f1eee8] text-gray-700"
-                                            }`}
+                                                }`}
                                         >
                                             {msg.content}
                                         </div>
@@ -593,7 +750,7 @@ function Designer({
                                     onKeyDown={(e) => {
                                         if (
                                             e.key ===
-                                                "Enter" &&
+                                            "Enter" &&
                                             !e.shiftKey
                                         ) {
                                             e.preventDefault();
@@ -618,11 +775,10 @@ function Designer({
                                             ? "Stop listening"
                                             : "Speak"
                                     }
-                                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm transition ${
-                                        isListening
+                                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm transition ${isListening
                                             ? "bg-[#9b8b72] text-white"
                                             : "bg-[#f1eee8] text-[#20201e] hover:bg-[#e5dfd4]"
-                                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                                        } disabled:cursor-not-allowed disabled:opacity-40`}
                                 >
                                     {isListening
                                         ? "■"

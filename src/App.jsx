@@ -214,9 +214,6 @@ function App() {
   const [showShop, setShowShop] =
     useState(false);
 
-  const [showExplore, setShowExplore] =
-    useState(false);
-
   const [showAuth, setShowAuth] =
     useState(false);
 
@@ -464,11 +461,28 @@ function App() {
     setShowDesigns(false);
     setShowAllStyles(false);
     setShowShop(false);
-    setShowExplore(false);
     setShowAuth(false);
     setDesigning(false);
     setDesignerData(null);
     setShowProfile(false);
+  }
+
+  function goToDesigns() {
+    setShowDesigns(false);
+    setShowAllStyles(false);
+    setShowShop(false);
+    setShowAuth(false);
+    setDesigning(false);
+    setDesignerData(null);
+    setShowProfile(false);
+
+    setTimeout(() => {
+      document
+        .getElementById("designs")
+        ?.scrollIntoView({
+          behavior: "smooth",
+        });
+    }, 50);
   }
 
   function chooseStyle(style) {
@@ -476,7 +490,6 @@ function App() {
 
     setShowAllStyles(false);
     setShowShop(false);
-    setShowExplore(false);
     setShowDesigns(false);
     setShowAuth(false);
 
@@ -486,17 +499,6 @@ function App() {
 
   function openShop() {
     setShowShop(true);
-    setShowAllStyles(false);
-    setShowDesigns(false);
-    setShowExplore(false);
-    setShowAuth(false);
-    setDesigning(false);
-    setDesignerData(null);
-  }
-
-  function openExplore() {
-    setShowExplore(true);
-    setShowShop(false);
     setShowAllStyles(false);
     setShowDesigns(false);
     setShowAuth(false);
@@ -512,7 +514,6 @@ function App() {
 
     setShowDesigns(true);
     setShowShop(false);
-    setShowExplore(false);
     setShowAllStyles(false);
     setShowAuth(false);
     setDesigning(false);
@@ -522,7 +523,6 @@ function App() {
   function openAuth() {
     setShowAuth(true);
     setShowShop(false);
-    setShowExplore(false);
     setShowAllStyles(false);
     setShowDesigns(false);
     setDesigning(false);
@@ -536,7 +536,6 @@ function App() {
     setShowDesigns(false);
     setShowAllStyles(false);
     setShowShop(false);
-    setShowExplore(false);
     setShowAuth(false);
 
     setDesignerData(null);
@@ -554,23 +553,6 @@ function App() {
         <Auth
           onBack={() =>
             setShowAuth(false)
-          }
-        />
-      </div>
-    );
-  }
-
-  // -------------------------
-  // EXPLORE PAGE
-  // -------------------------
-
-  if (showExplore) {
-    return (
-      <div className="page-enter">
-        <ExplorePage
-          onBack={goHome}
-          onChooseStyle={
-            chooseStyle
           }
         />
       </div>
@@ -765,7 +747,7 @@ function App() {
         <SiteFooter
           onHome={goHome}
           onExplore={
-            openExplore
+            goToDesigns
           }
           onDesigns={
             openDesigns
@@ -795,7 +777,7 @@ function App() {
             startDesigning
           }
           onExplore={
-            openExplore
+            goToDesigns
           }
         />
       </div>
@@ -947,7 +929,7 @@ function App() {
         <SiteFooter
           onHome={goHome}
           onExplore={
-            openExplore
+            goToDesigns
           }
           onDesigns={
             openDesigns
@@ -1049,14 +1031,12 @@ function App() {
         </button>
 
         <div className="hidden items-center gap-8 text-sm md:flex">
-          <button
-            onClick={
-              openExplore
-            }
+          <a
+            href="#designs"
             className="transition hover:text-[#9b8b72]"
           >
             Explore
-          </button>
+          </a>
 
           <a
             href="#how"
@@ -1110,8 +1090,8 @@ function App() {
 
                 <span
                   className={`text-xs text-gray-500 transition-transform ${showProfile
-                      ? "rotate-180"
-                      : ""
+                    ? "rotate-180"
+                    : ""
                     }`}
                 >
                   ▾
@@ -1479,7 +1459,7 @@ function App() {
       <SiteFooter
         onHome={goHome}
         onExplore={
-          openExplore
+          goToDesigns
         }
         onDesigns={
           openDesigns
@@ -1506,417 +1486,13 @@ function App() {
 }
 
 // -------------------------
-// EXPLORE PAGE
-// -------------------------
-
-function ExplorePage({
-  onBack,
-  onChooseStyle,
-}) {
-  const [styleFilter, setStyleFilter] =
-    useState("All");
-
-  const [roomFilter, setRoomFilter] =
-    useState("All");
-
-  const inspirations = [
-    {
-      id: 1,
-      style: "Modern",
-      room: "Living Room",
-      title: "Warm Modern Living",
-      description:
-        "Clean architecture, soft neutrals and comfortable statement furniture.",
-      image:
-        "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 2,
-      style: "Japandi",
-      room: "Bedroom",
-      title: "Calm Japandi Bedroom",
-      description:
-        "Natural wood, soft textures and a quiet palette for a peaceful room.",
-      image:
-        "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 3,
-      style: "Minimal",
-      room: "Workspace",
-      title: "Minimal Work Corner",
-      description:
-        "A focused workspace with simple furniture and plenty of breathing room.",
-      image:
-        "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 4,
-      style: "Boho",
-      room: "Living Room",
-      title: "Soft Boho Living",
-      description:
-        "Layered textiles, earthy tones and natural materials create a relaxed feel.",
-      image:
-        "https://images.unsplash.com/photo-1538688525198-9b88f6f53126?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 5,
-      style: "Luxury",
-      room: "Bedroom",
-      title: "Quiet Luxury Bedroom",
-      description:
-        "Elegant materials, warm lighting and refined details without feeling excessive.",
-      image:
-        "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 6,
-      style: "Scandinavian",
-      room: "Dining Room",
-      title: "Scandinavian Dining",
-      description:
-        "Bright interiors, natural finishes and functional pieces made for everyday life.",
-      image:
-        "https://images.unsplash.com/photo-1600210491892-03d54c0aaf87?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 7,
-      style: "Industrial",
-      room: "Workspace",
-      title: "Industrial Creative Studio",
-      description:
-        "Raw textures, dark accents and practical furniture with urban character.",
-      image:
-        "https://images.unsplash.com/photo-1524758631624-e2822e304c36?auto=format&fit=crop&w=1200&q=85",
-    },
-    {
-      id: 8,
-      style: "Biophilic",
-      room: "Living Room",
-      title: "Biophilic Retreat",
-      description:
-        "Bring nature indoors with greenery, natural light and organic textures.",
-      image:
-        "https://images.unsplash.com/photo-1617104678098-de229db51175?auto=format&fit=crop&w=1200&q=85",
-    },
-  ];
-
-  const styles = [
-    "All",
-    "Modern",
-    "Minimal",
-    "Japandi",
-    "Boho",
-    "Luxury",
-    "Scandinavian",
-    "Industrial",
-    "Biophilic",
-  ];
-
-  const rooms = [
-    "All",
-    "Living Room",
-    "Bedroom",
-    "Workspace",
-    "Dining Room",
-  ];
-
-  const filteredInspirations =
-    inspirations.filter(
-      (item) => {
-        const matchesStyle =
-          styleFilter === "All" ||
-          item.style === styleFilter;
-
-        const matchesRoom =
-          roomFilter === "All" ||
-          item.room === roomFilter;
-
-        return (
-          matchesStyle &&
-          matchesRoom
-        );
-      }
-    );
-
-  return (
-    <div className="min-h-screen bg-[#f7f5f0]">
-      <header className="border-b border-[#dedbd4] px-5 py-5 sm:px-6 md:px-10">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <button
-            onClick={
-              onBack
-            }
-            className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
-          >
-            roomora
-            <span className="text-[#9b8b72]">
-              .
-            </span>
-          </button>
-
-          <button
-            onClick={() =>
-              onChooseStyle(
-                "Modern"
-              )
-            }
-            className="roomora-button rounded-full bg-[#20201e] px-5 py-2.5 text-sm text-white"
-          >
-            Start designing
-          </button>
-        </div>
-      </header>
-
-      <section className="px-5 pb-14 pt-12 sm:px-6 md:px-10 md:pb-20 md:pt-20">
-        <div className="mx-auto max-w-7xl">
-          <button
-            onClick={
-              onBack
-            }
-            className="mb-8 text-sm text-gray-500 transition hover:text-[#20201e]"
-          >
-            Back to home
-          </button>
-
-          <p className="text-xs uppercase tracking-[0.25em] text-[#9b8b72]">
-            Roomora Explore
-          </p>
-
-          <h1 className="mt-4 max-w-4xl text-5xl font-medium leading-tight tracking-tight sm:text-6xl md:text-7xl">
-            Find a room that feels like you.
-          </h1>
-
-          <p className="mt-6 max-w-2xl text-base leading-7 text-gray-500 md:text-lg">
-            Browse interior inspiration, discover new styles and
-            find ideas you can bring into your own space.
-          </p>
-        </div>
-      </section>
-
-      <section className="border-y border-[#dedbd4] bg-[#f3f0ea] px-5 py-5 sm:px-6 md:px-10">
-        <div className="mx-auto max-w-7xl">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
-              <p className="mb-3 text-xs uppercase tracking-[0.18em] text-gray-400">
-                Style
-              </p>
-
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {styles.map(
-                  (style) => (
-                    <button
-                      key={style}
-                      onClick={() =>
-                        setStyleFilter(
-                          style
-                        )
-                      }
-                      className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${styleFilter ===
-                          style
-                          ? "bg-[#20201e] text-white"
-                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
-                        }`}
-                    >
-                      {style}
-                    </button>
-                  )
-                )}
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-3 text-xs uppercase tracking-[0.18em] text-gray-400">
-                Room
-              </p>
-
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {rooms.map(
-                  (room) => (
-                    <button
-                      key={room}
-                      onClick={() =>
-                        setRoomFilter(
-                          room
-                        )
-                      }
-                      className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${roomFilter ===
-                          room
-                          ? "bg-[#20201e] text-white"
-                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
-                        }`}
-                    >
-                      {room}
-                    </button>
-                  )
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <main className="mx-auto max-w-7xl px-5 py-12 sm:px-6 md:px-10 md:py-20">
-        <div className="mb-10">
-          <p className="text-sm text-gray-500">
-            {
-              filteredInspirations.length
-            }{" "}
-            inspirations
-          </p>
-
-          <h2 className="mt-2 text-3xl font-medium md:text-4xl">
-            Inspiration for your next room
-          </h2>
-        </div>
-
-        {filteredInspirations.length ===
-          0 ? (
-          <div className="roomora-card rounded-[2rem] border border-[#dedbd4] bg-white px-6 py-20 text-center">
-            <h2 className="text-2xl font-medium">
-              No inspiration found
-            </h2>
-
-            <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-gray-500">
-              Try another style or room type.
-            </p>
-
-            <button
-              onClick={() => {
-                setStyleFilter(
-                  "All"
-                );
-                setRoomFilter(
-                  "All"
-                );
-              }}
-              className="roomora-button mt-7 rounded-full bg-[#20201e] px-6 py-3 text-sm text-white"
-            >
-              Clear filters
-            </button>
-          </div>
-        ) : (
-          <div className="grid gap-x-6 gap-y-14 md:grid-cols-2">
-            {filteredInspirations.map(
-              (item) => (
-                <div
-                  key={
-                    item.id
-                  }
-                  className="group"
-                >
-                  <div className="image-motion relative overflow-hidden rounded-[2rem] bg-white">
-                    <img
-                      src={
-                        item.image
-                      }
-                      alt={
-                        item.title
-                      }
-                      className="h-[380px] w-full object-cover sm:h-[450px] md:h-[500px]"
-                    />
-
-                    <div className="absolute left-5 top-5">
-                      <span className="rounded-full bg-white/90 px-4 py-2 text-xs text-gray-600 backdrop-blur">
-                        {
-                          item.style
-                        }
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="mt-5">
-                    <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.15em] text-[#9b8b72]">
-                          {
-                            item.room
-                          }
-                        </p>
-
-                        <h3 className="mt-2 text-2xl font-medium">
-                          {
-                            item.title
-                          }
-                        </h3>
-
-                        <p className="mt-2 max-w-lg text-sm leading-6 text-gray-500">
-                          {
-                            item.description
-                          }
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={() =>
-                          onChooseStyle(
-                            item.style
-                          )
-                        }
-                        className="roomora-button shrink-0 self-start rounded-full bg-[#20201e] px-5 py-3 text-xs text-white"
-                      >
-                        Create this style
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        )}
-      </main>
-
-      <section className="px-5 pb-20 sm:px-6 md:px-10">
-        <div className="mx-auto max-w-7xl overflow-hidden rounded-[2rem] bg-[#e8e2d7] px-7 py-14 sm:px-8 md:px-16 md:py-20">
-          <p className="text-xs uppercase tracking-[0.25em] text-[#8d7d65]">
-            Your room. Your style.
-          </p>
-
-          <h2 className="mt-4 max-w-2xl text-4xl font-medium md:text-6xl">
-            Found something you love?
-          </h2>
-
-          <p className="mt-5 max-w-xl text-base leading-7 text-gray-600">
-            Upload your own room and let Roomora help you bring
-            the inspiration to life.
-          </p>
-
-          <button
-            onClick={() =>
-              onChooseStyle(
-                styleFilter ===
-                  "All"
-                  ? "Modern"
-                  : styleFilter
-              )
-            }
-            className="roomora-button mt-8 rounded-full bg-[#20201e] px-7 py-3.5 text-sm text-white"
-          >
-            Start with this inspiration
-          </button>
-        </div>
-      </section>
-
-      <SiteFooter
-        onHome={onBack}
-        onExplore={onBack}
-        onDesigns={() => { }}
-        onStyles={() => { }}
-        onShop={() => { }}
-        onHow={onBack}
-      />
-    </div>
-  );
-}
-
-// -------------------------
 // SHOP PAGE
 // -------------------------
 
 function ShopPage({
   onBack,
   onStartDesigning,
+  onExplore,
 }) {
   const [search, setSearch] =
     useState("");
@@ -2183,9 +1759,9 @@ function ShopPage({
                         )
                       }
                       className={`whitespace-nowrap rounded-full px-4 py-2 text-sm transition ${category ===
-                          item
-                          ? "bg-[#20201e] text-white"
-                          : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
+                        item
+                        ? "bg-[#20201e] text-white"
+                        : "border border-[#d8d3ca] bg-white text-gray-600 hover:bg-[#ece8e0]"
                         }`}
                     >
                       {item}
@@ -2323,9 +1899,9 @@ function ShopPage({
 
       <SiteFooter
         onHome={onBack}
-        onExplore={() => { }}
-        onDesigns={() => { }}
-        onStyles={() => { }}
+        onExplore={onExplore}
+        onDesigns={onBack}
+        onStyles={onBack}
         onShop={onBack}
         onHow={onBack}
       />

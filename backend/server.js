@@ -23,7 +23,7 @@ app.use(
 
 app.use(
   express.json({
-    limit: "12mb",
+    limit: "20mb",
   })
 );
 
@@ -49,25 +49,28 @@ if (!process.env.GEMINI_IMAGE_API_KEY) {
 // GOOGLE AI CLIENTS
 // =====================================================
 
-// Used for AI chat + room image understanding
+// Free/text project
 const textAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_TEXT_API_KEY,
 });
 
-// Used for redesigned room image generation
+// Paid project
+// Used for:
+// 1. Room image understanding
+// 2. Room image generation
 const imageAI = new GoogleGenAI({
   apiKey: process.env.GEMINI_IMAGE_API_KEY,
 });
 
 console.log("✅ Google text AI loaded successfully");
-console.log("✅ Google image AI loaded successfully");
+console.log("✅ Google paid AI loaded successfully");
 
 // =====================================================
 // HELPER - CLEAN BASE64 IMAGE
 // =====================================================
 
 function cleanImageData(image) {
-  if (!image) {
+  if (!image || typeof image !== "string") {
     return null;
   }
 
@@ -75,17 +78,23 @@ function cleanImageData(image) {
   let data = image;
 
   // Example:
-  // data:image/jpeg;base64,AAAA...
+  // data:image/jpeg;base64,/9j/4AAQ...
 
   if (image.startsWith("data:")) {
     const match = image.match(
       /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/
     );
 
-    if (match) {
-      mimeType = match[1];
-      data = match[2];
+    if (!match) {
+      return null;
     }
+
+    mimeType = match[1];
+    data = match[2];
+  }
+
+  if (!data) {
+    return null;
   }
 
   return {
@@ -108,14 +117,13 @@ app.get("/", (req, res) => {
 // AI CHAT
 //
 // IMPORTANT:
-// This endpoint receives:
-// - user message
-// - selected style
-// - budget
-// - uploaded room image
+// - Receives user question
+// - Receives selected style
+// - Receives budget
+// - Receives uploaded room image
 //
-// The image is sent to Gemini 3.8 Flash so that the
-// AI can actually inspect the room.
+// Uses GEMINI_IMAGE_API_KEY because this request
+// needs image understanding.
 // =====================================================
 
 app.post("/api/chat", async (req, res) => {
@@ -147,19 +155,51 @@ app.post("/api/chat", async (req, res) => {
     }
 
     // -------------------------------------------------
-    // System instructions
+    // Prepare image
+    // -------------------------------------------------
+
+    let roomImage = null;
+
+    if (image) {
+      roomImage = cleanImageData(image);
+
+      if (!roomImage) {
+        console.log("❌ Invalid image data received");
+
+        return res.status(400).json({
+          error: "The uploaded room image is invalid.",
+        });
+      }
+
+      console.log("✅ Room image successfully decoded");
+      console.log(
+        "Image MIME type:",
+        roomImage.mimeType
+      );
+      console.log(
+        "Image base64 length:",
+        roomImage.data.length
+      );
+    } else {
+      console.log(
+        "⚠️ No room image was provided"
+      );
+    }
+
+    // -------------------------------------------------
+    // System instruction
     // -------------------------------------------------
 
     const systemInstruction = `
 You are Roomora, an AI interior design assistant.
 
-The user has uploaded a photo of their room.
+Your job is to help the user improve their actual room.
 
-Your job is to analyze the uploaded room image and give
-personalized interior design advice based on what you can
-actually see.
+The user may provide a photo of their room.
+When a room image is provided, inspect it carefully before
+answering.
 
-ROOM STYLE:
+SELECTED INTERIOR STYLE:
 ${style}
 
 USER BUDGET:
@@ -167,107 +207,89 @@ USER BUDGET:
 
 IMPORTANT RULES:
 
-1. Actually inspect the uploaded room image.
-2. Do NOT say that you cannot see the room when an image
-   has been provided.
-3. Mention visible details from the room when relevant.
-4. Recommend realistic improvements for the actual room.
+1. Analyze the uploaded room image when it is provided.
+2. Do not say you cannot see the room when an image
+   was successfully provided.
+3. Base your recommendations on visible details.
+4. Mention visible furniture, layout, colors, lighting,
+   windows, walls, flooring and empty spaces when relevant.
 5. Respect the selected interior style.
 6. Respect the user's budget.
-7. Suggest practical furniture, colors, lighting,
-   decor and layout improvements.
+7. Give realistic recommendations for a normal home.
 8. Avoid unnecessary structural changes.
-9. Do not invent furniture or objects that are clearly
-   not present.
-10. Keep the answer friendly and easy to understand.
-11. Answer the user's question directly.
-12. Keep the response reasonably concise.
-
-Examples of useful observations:
-- room layout
-- wall colors
-- visible furniture
-- lighting
-- windows
-- floor
-- empty spaces
-- clutter
-- storage
-- decor
-- color combinations
-- furniture positioning
+9. Do not invent objects that are clearly not visible.
+10. Answer the user's exact question.
+11. Keep the answer practical and easy to understand.
+12. Keep the answer reasonably concise.
 `;
 
     // -------------------------------------------------
-    // Build multimodal input
+    // Build Gemini content
     // -------------------------------------------------
 
-    const input = [];
+    const contents = [];
 
-    // Add room image first when available
-    if (image) {
-      const roomImage = cleanImageData(image);
-
-      if (roomImage) {
-        input.push({
-          type: "image",
-          mime_type: roomImage.mimeType,
+    // Image first
+    if (roomImage) {
+      contents.push({
+        inlineData: {
+          mimeType: roomImage.mimeType,
           data: roomImage.data,
-        });
-
-        console.log("✅ Room image attached to AI request");
-      }
-    } else {
-      console.log("⚠️ No room image was provided");
+        },
+      });
     }
 
-    // Add user's text question
-    input.push({
-      type: "text",
+    // User message
+    contents.push({
       text: message,
     });
 
-    // -------------------------------------------------
-    // Call Gemini
-    // -------------------------------------------------
-
-    console.log("Sending request to Gemini 3.8 Flash...");
-
-    const interaction = await textAI.interactions.create({
-      model: "gemini-3.8-flash",
-
-      system_instruction: systemInstruction,
-
-      input,
-
-      store: false,
-    });
-
-    console.log("✅ Gemini interaction completed");
+    console.log(
+      "Sending image + question to Gemini 3.8 Flash..."
+    );
 
     // -------------------------------------------------
-    // Get generated text
+    // GEMINI MULTIMODAL REQUEST
+    // -------------------------------------------------
+
+    const response =
+      await imageAI.models.generateContent({
+        model: "gemini-3.7-flash",
+
+        contents,
+
+        config: {
+          systemInstruction,
+        },
+      });
+
+    console.log(
+      "✅ Gemini image-understanding request completed"
+    );
+
+    // -------------------------------------------------
+    // Read response
     // -------------------------------------------------
 
     const reply =
-      interaction.output_text?.trim();
+      response.text?.trim();
 
     console.log("AI REPLY:");
     console.log(reply);
 
     if (!reply) {
       console.error(
-        "❌ Gemini returned an empty text response"
+        "❌ Gemini returned an empty response"
       );
 
       return res.status(500).json({
         error:
-          "The AI returned an empty response.",
+          "Gemini returned an empty response.",
       });
     }
 
     // -------------------------------------------------
-    // Send response to frontend
+    // Send reply to frontend
     // -------------------------------------------------
 
     return res.json({
@@ -276,25 +298,43 @@ Examples of useful observations:
 
   } catch (error) {
     console.error("\n========================================");
-    console.error("❌ CHAT ERROR");
+    console.error("❌ ROOMORA CHAT ERROR");
     console.error("========================================");
 
-    console.error("Message:", error.message);
-    console.error("Status:", error.status);
-    console.error("Code:", error.code);
-    console.error("Full error:", error);
+    console.error(
+      "Message:",
+      error.message
+    );
+
+    console.error(
+      "Status:",
+      error.status
+    );
+
+    console.error(
+      "Code:",
+      error.code
+    );
+
+    console.error(
+      "Full error:",
+      error
+    );
 
     console.error("========================================\n");
 
     const status =
       error.status >= 400 &&
-      error.status < 600
+        error.status < 600
         ? error.status
         : 500;
 
     return res.status(status).json({
-      error: "Roomora AI request failed",
-      details: error.message,
+      error:
+        "Roomora AI request failed",
+
+      details:
+        error.message,
     });
   }
 });
@@ -302,7 +342,7 @@ Examples of useful observations:
 // =====================================================
 // GENERATE REDESIGNED ROOM
 //
-// Uses your PAID / IMAGE API key
+// Uses PAID / IMAGE API KEY
 // =====================================================
 
 app.post(
@@ -316,12 +356,17 @@ app.post(
       } = req.body;
 
       console.log("\n========================================");
-      console.log("ROOMORA IMAGE GENERATION REQUEST");
+      console.log(
+        "ROOMORA IMAGE GENERATION REQUEST"
+      );
       console.log("========================================");
 
       console.log("Style:", style);
       console.log("Budget:", budget);
-      console.log("Image received:", !!image);
+      console.log(
+        "Image received:",
+        !!image
+      );
 
       // -------------------------------------------------
       // Validate image
@@ -329,7 +374,8 @@ app.post(
 
       if (!image) {
         return res.status(400).json({
-          error: "Room image is required",
+          error:
+            "Room image is required",
         });
       }
 
@@ -338,12 +384,17 @@ app.post(
 
       if (!roomImage) {
         return res.status(400).json({
-          error: "Invalid room image",
+          error:
+            "Invalid room image",
         });
       }
 
+      console.log(
+        "✅ Room image prepared"
+      );
+
       // -------------------------------------------------
-      // Image generation prompt
+      // Prompt
       // -------------------------------------------------
 
       const prompt = `
@@ -376,26 +427,30 @@ REQUIREMENTS:
 - Respect the user's budget.
 - Avoid unnecessary structural changes.
 - Do not completely replace the room structure.
-- Create a professional photorealistic interior makeover.
+- Make the final image photorealistic.
+- Make it look like the same room after an
+  interior makeover.
 `;
 
       console.log(
-        `Generating ${style} room with Gemini image model...`
+        "Sending room to Gemini image model..."
       );
 
       // -------------------------------------------------
-      // Generate image
+      // IMAGE GENERATION
       // -------------------------------------------------
 
       const interaction =
         await imageAI.interactions.create({
-          model: "gemini-3.1-flash-image",
+          model:
+            "gemini-3.1-flash-image",
 
           input: [
             {
               type: "text",
               text: prompt,
             },
+
             {
               type: "image",
               mime_type:
@@ -411,18 +466,16 @@ REQUIREMENTS:
         });
 
       console.log(
-        "✅ Image interaction completed"
+        "✅ Image generation interaction completed"
       );
 
       // -------------------------------------------------
       // Find generated image
-      //
-      // The Interactions API can return image content
-      // inside model output steps.
       // -------------------------------------------------
 
       let generatedImage = null;
 
+      // Direct output_image
       if (
         interaction.output_image &&
         interaction.output_image.data
@@ -431,25 +484,36 @@ REQUIREMENTS:
           interaction.output_image;
       }
 
-      // Fallback: inspect interaction steps
+      // Fallback: inspect steps
       if (
         !generatedImage &&
         Array.isArray(interaction.steps)
       ) {
         for (const step of interaction.steps) {
           if (
-            step.type === "model_output" &&
-            Array.isArray(step.content)
+            step.type !== "model_output"
           ) {
-            for (const contentBlock of step.content) {
-              if (
-                contentBlock.type === "image" &&
-                contentBlock.data
-              ) {
-                generatedImage =
-                  contentBlock;
-                break;
-              }
+            continue;
+          }
+
+          if (
+            !Array.isArray(step.content)
+          ) {
+            continue;
+          }
+
+          for (
+            const contentBlock
+            of step.content
+          ) {
+            if (
+              contentBlock.type === "image" &&
+              contentBlock.data
+            ) {
+              generatedImage =
+                contentBlock;
+
+              break;
             }
           }
 
@@ -460,7 +524,7 @@ REQUIREMENTS:
       }
 
       // -------------------------------------------------
-      // Validate generated image
+      // Check image
       // -------------------------------------------------
 
       if (
@@ -468,22 +532,22 @@ REQUIREMENTS:
         !generatedImage.data
       ) {
         console.error(
-          "❌ Image model did not return image data"
+          "❌ No generated image was returned"
         );
 
         console.error(
-          "Interaction:",
+          "Interaction response:",
           interaction
         );
 
         return res.status(500).json({
           error:
-            "The image model did not return an image",
+            "The image model did not return an image.",
         });
       }
 
       // -------------------------------------------------
-      // Convert image to data URL
+      // Convert to data URL
       // -------------------------------------------------
 
       const outputMimeType =
@@ -497,17 +561,15 @@ REQUIREMENTS:
         "✅ Room image generated successfully"
       );
 
-      // -------------------------------------------------
-      // Send image to frontend
-      // -------------------------------------------------
-
       return res.json({
         image: imageData,
       });
 
     } catch (error) {
       console.error("\n========================================");
-      console.error("❌ IMAGE GENERATION ERROR");
+      console.error(
+        "❌ IMAGE GENERATION ERROR"
+      );
       console.error("========================================");
 
       console.error(
@@ -534,7 +596,7 @@ REQUIREMENTS:
 
       const status =
         error.status >= 400 &&
-        error.status < 600
+          error.status < 600
           ? error.status
           : 500;
 
@@ -553,10 +615,15 @@ REQUIREMENTS:
 // START SERVER
 // =====================================================
 
-app.listen(PORT, () => {
-  console.log("\n========================================");
-  console.log(
-    `🚀 Roomora backend running on http://localhost:${PORT}`
-  );
-  console.log("========================================");
-});
+app.listen(
+  PORT,
+  () => {
+    console.log("\n========================================");
+    console.log(
+      `🚀 Roomora backend running on http://localhost:${PORT}`
+    );
+    console.log(
+      "========================================\n"
+    );
+  }
+);
