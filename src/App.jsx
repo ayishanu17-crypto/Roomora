@@ -1024,7 +1024,7 @@ function App() {
           onClick={goHome}
           className="text-2xl font-semibold tracking-tight transition hover:opacity-70"
         >
-          roomora
+          ROOMORA
           <span className="text-[#9b8b72]">
             .
           </span>
@@ -1512,6 +1512,8 @@ function ShopPage({
       price: 8999,
       image:
         "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=modern+lounge+chair",
     },
     {
       id: 2,
@@ -1521,6 +1523,8 @@ function ShopPage({
       price: 3499,
       image:
         "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=arc+floor+lamp",
     },
     {
       id: 3,
@@ -1530,6 +1534,8 @@ function ShopPage({
       price: 6499,
       image:
         "https://images.unsplash.com/photo-1494438639946-1ebd1d20bf85?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=minimalist+desk",
     },
     {
       id: 4,
@@ -1539,6 +1545,8 @@ function ShopPage({
       price: 4299,
       image:
         "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=accent+side+table",
     },
     {
       id: 5,
@@ -1548,6 +1556,8 @@ function ShopPage({
       price: 1299,
       image:
         "https://images.unsplash.com/photo-1612196808214-b8e1d6145a8c?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=ceramic+vase+home+decor",
     },
     {
       id: 6,
@@ -1557,6 +1567,8 @@ function ShopPage({
       price: 4599,
       image:
         "https://images.unsplash.com/photo-1600166898405-da9535204843?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=textured+area+rug",
     },
     {
       id: 7,
@@ -1566,6 +1578,8 @@ function ShopPage({
       price: 2199,
       image:
         "https://images.unsplash.com/photo-1549490349-8643362247b5?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=wall+art+set+home+decor",
     },
     {
       id: 8,
@@ -1575,6 +1589,8 @@ function ShopPage({
       price: 7499,
       image:
         "https://images.unsplash.com/photo-1595428774223-ef52624120d2?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=wooden+storage+cabinet",
     },
     {
       id: 9,
@@ -1584,6 +1600,8 @@ function ShopPage({
       price: 24999,
       image:
         "https://images.unsplash.com/photo-1550226891-ef816aed4a98?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=boucle+sofa",
     },
     {
       id: 10,
@@ -1593,6 +1611,8 @@ function ShopPage({
       price: 2999,
       image:
         "https://images.unsplash.com/photo-1524484485831-a92ffc0de03f?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=pendant+light+home",
     },
     {
       id: 11,
@@ -1602,6 +1622,8 @@ function ShopPage({
       price: 899,
       image:
         "https://images.unsplash.com/photo-1485955900006-10f4d324d411?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=indoor+decorative+plants",
     },
     {
       id: 12,
@@ -1611,6 +1633,8 @@ function ShopPage({
       price: 9999,
       image:
         "https://images.unsplash.com/photo-1598300042247-d088f8ab3a91?auto=format&fit=crop&w=900&q=85",
+      link:
+        "https://www.amazon.in/s?k=reading+chair",
     },
   ];
 
@@ -1916,14 +1940,6 @@ function ShopPage({
 function ProductCard({
   product,
 }) {
-  function handleProductClick() {
-    alert(
-      `${product.name}\n\n${product.style} style\n₹${product.price.toLocaleString(
-        "en-IN"
-      )}\n\nProduct links will be connected later.`
-    );
-  }
-
   return (
     <div className="group">
       <div className="image-motion relative overflow-hidden rounded-[1.75rem] bg-white">
@@ -1965,14 +1981,14 @@ function ProductCard({
             </p>
           </div>
 
-          <button
-            onClick={
-              handleProductClick
-            }
-            className="roomora-button rounded-full border border-[#d8d3ca] px-4 py-2 text-xs"
+          <a
+            href={product.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="roomora-button rounded-full border border-[#d8d3ca] px-4 py-2 text-xs transition hover:bg-[#20201e] hover:text-white"
           >
-            View product
-          </button>
+            View product ↗
+          </a>
         </div>
       </div>
     </div>

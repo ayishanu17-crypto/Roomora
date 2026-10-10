@@ -45,150 +45,154 @@ function Designer({
     ];
 
     // -------------------------
-    // PREPARE IMAGE FOR AI
-    // Compress the image before sending it to the backend.
-    // This avoids sending very large phone photos.
+    // RENDER AI SHOPPING LINKS
     // -------------------------
 
-    function fileToBase64(
-        file,
-        maxSize = 1600,
-        quality = 0.75
-    ) {
-        return new Promise((resolve, reject) => {
-            if (!file) {
-                reject(new Error("No image file was provided."));
-                return;
+    // Gemini can return links like:
+    // Shop floor lamp:
+    // https://www.amazon.in/...
+    //
+    // This function turns those URLs into clean clickable
+    // shopping buttons directly inside the AI chat bubble.
+
+    function renderAIMessage(content) {
+        if (!content) {
+            return null;
+        }
+
+        const parts = [];
+        const shoppingLinkRegex = /Shop\s+([^:\n]+):\s*(https?:\/\/[^\s]+)/gi;
+        let lastIndex = 0;
+        let match;
+
+        while ((match = shoppingLinkRegex.exec(content)) !== null) {
+            const before = content.slice(
+                lastIndex,
+                match.index
+            );
+
+            if (before) {
+                parts.push({
+                    type: "text",
+                    value: before,
+                });
             }
 
-            const reader = new FileReader();
+            let url = match[2].trim();
 
-            reader.onload = () => {
-                const originalDataUrl = reader.result;
-                const img = new Image();
+            // Remove punctuation accidentally attached to the URL.
+            url = url.replace(/[.,;!?]+$/, "");
 
-                img.onload = () => {
-                    let width = img.width;
-                    let height = img.height;
+            parts.push({
+                type: "link",
+                label: `Shop ${match[1].trim()} ↗`,
+                url,
+            });
 
-                    if (
-                        width > maxSize ||
-                        height > maxSize
-                    ) {
-                        if (width > height) {
-                            height =
-                                (height / width) *
-                                maxSize;
-                            width = maxSize;
-                        } else {
-                            width =
-                                (width / height) *
-                                maxSize;
-                            height = maxSize;
-                        }
-                    }
+            lastIndex = match.index + match[0].length;
+        }
 
-                    const canvas =
-                        document.createElement("canvas");
+        const remaining = content.slice(lastIndex);
 
-                    canvas.width = Math.round(width);
-                    canvas.height = Math.round(height);
+        if (remaining) {
+            parts.push({
+                type: "text",
+                value: remaining,
+            });
+        }
 
-                    const context =
-                        canvas.getContext("2d");
+        // If Gemini did not use the "Shop item: URL" format,
+        // automatically convert any plain URL into a clickable link.
+        if (parts.length === 1 && parts[0]?.type === "text") {
+            const urlParts = [];
+            const plainUrlRegex = /(https?:\/\/[^\s]+)/gi;
+            let urlLastIndex = 0;
+            let urlMatch;
 
-                    if (!context) {
-                        reject(
-                            new Error(
-                                "Could not process the room image."
-                            )
-                        );
-                        return;
-                    }
-
-                    context.drawImage(
-                        img,
-                        0,
-                        0,
-                        canvas.width,
-                        canvas.height
-                    );
-
-                    const compressedImage =
-                        canvas.toDataURL(
-                            "image/jpeg",
-                            quality
-                        );
-
-                    resolve(compressedImage);
-                };
-
-                img.onerror = () => {
-                    // Fall back to the original image if the
-                    // browser cannot decode the file.
-                    resolve(originalDataUrl);
-                };
-
-                img.src = originalDataUrl;
-            };
-
-            reader.onerror = () => {
-                reject(
-                    new Error(
-                        "Could not read the room image."
-                    )
+            while (
+                (urlMatch = plainUrlRegex.exec(parts[0].value)) !== null
+            ) {
+                const beforeUrl = parts[0].value.slice(
+                    urlLastIndex,
+                    urlMatch.index
                 );
-            };
 
-            reader.readAsDataURL(file);
+                if (beforeUrl) {
+                    urlParts.push({
+                        type: "text",
+                        value: beforeUrl,
+                    });
+                }
+
+                let url = urlMatch[1].replace(/[.,;!?]+$/, "");
+
+                urlParts.push({
+                    type: "link",
+                    label: "Open link ↗",
+                    url,
+                });
+
+                urlLastIndex = urlMatch.index + urlMatch[1].length;
+            }
+
+            const remainingUrlText = parts[0].value.slice(urlLastIndex);
+
+            if (remainingUrlText) {
+                urlParts.push({
+                    type: "text",
+                    value: remainingUrlText,
+                });
+            }
+
+            if (urlParts.length > 0) {
+                parts.splice(0, 1, ...urlParts);
+            }
+        }
+
+        return parts.map((part, index) => {
+            if (part.type === "link") {
+                return (
+                    <a
+                        key={`roomora-link-${index}`}
+                        href={part.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="my-1 inline-flex items-center rounded-full border border-[#d8d3ca] bg-white px-3 py-1.5 text-xs font-medium text-[#6f624f] shadow-sm transition hover:border-[#9b8b72] hover:bg-[#f7f5f0]"
+                    >
+                        {part.label}
+                    </a>
+                );
+            }
+
+            return (
+                <span
+                    key={`roomora-text-${index}`}
+                    className="whitespace-pre-wrap"
+                >
+                    {part.value}
+                </span>
+            );
         });
     }
 
-    // Convert an image URL (including a blob URL) into
-    // a File object when imageFile is unavailable.
-    async function imageUrlToFile(imageUrl) {
-        if (!imageUrl) {
-            throw new Error("No room image is available.");
-        }
+    // -------------------------
+    // FILE TO BASE64
+    // -------------------------
 
-        const response = await fetch(imageUrl);
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
 
-        if (!response.ok) {
-            throw new Error(
-                "Could not load the room image."
-            );
-        }
+            reader.readAsDataURL(file);
 
-        const blob = await response.blob();
+            reader.onload = () => {
+                resolve(reader.result);
+            };
 
-        return new File(
-            [blob],
-            "roomora-room-image.jpg",
-            {
-                type: blob.type || "image/jpeg",
-            }
-        );
-    }
-
-    // Always return a compressed image for the AI request.
-    async function getAIImageData() {
-        const file =
-            imageFile ||
-            (image
-                ? await imageUrlToFile(image)
-                : null);
-
-        if (!file) {
-            throw new Error(
-                "Please upload a room photo first."
-            );
-        }
-
-        return await fileToBase64(
-            file,
-            1600,
-            0.75
-        );
+            reader.onerror = (error) => {
+                reject(error);
+            };
+        });
     }
 
     // -------------------------
@@ -334,15 +338,12 @@ function Designer({
         setLoading(true);
 
         try {
-            // Prepare a smaller image before sending it.
-            const imageData =
-                await getAIImageData();
+            let imageData = null;
 
-            console.log(
-                "Roomora AI image prepared:",
-                Math.round(imageData.length / 1024),
-                "KB"
-            );
+            if (imageFile) {
+                imageData =
+                    await fileToBase64(imageFile);
+            }
 
             const response = await fetch(
                 "http://localhost:5000/api/chat",
@@ -368,38 +369,29 @@ function Designer({
 
             if (!response.ok) {
                 throw new Error(
-                    data.details ||
                     data.error ||
-                    "Roomora AI request failed."
+                    "Something went wrong"
                 );
             }
-
-            if (!data.reply) {
-                throw new Error(
-                    "Roomora AI returned an empty response."
-                );
-            }
-
-            setMessages((prev) => [
-                ...prev,
-                {
-                    role: "assistant",
-                    content: data.reply,
-                },
-            ]);
-        } catch (error) {
-            console.error(
-                "ROOMORA CHAT ERROR:",
-                error
-            );
 
             setMessages((prev) => [
                 ...prev,
                 {
                     role: "assistant",
                     content:
-                        error.message ||
-                        "Could not connect to Roomora AI.",
+                        data.reply ||
+                        "I couldn't generate a response right now.",
+                },
+            ]);
+        } catch (error) {
+            console.error(error);
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    role: "assistant",
+                    content:
+                        "I couldn't connect to Roomora AI right now. Please try again when the AI service is running.",
                 },
             ]);
         } finally {
@@ -422,24 +414,8 @@ function Designer({
         setGenerating(true);
 
         try {
-            const file =
-                imageFile ||
-                (image
-                    ? await imageUrlToFile(image)
-                    : null);
-
-            if (!file) {
-                throw new Error(
-                    "Please upload a room photo first."
-                );
-            }
-
             const imageData =
-                await fileToBase64(
-                    file,
-                    2000,
-                    0.82
-                );
+                await fileToBase64(imageFile);
 
             const response = await fetch(
                 "http://localhost:5000/api/generate-room",
@@ -473,14 +449,10 @@ function Designer({
                 data.image
             );
         } catch (error) {
-            console.error(
-                "ROOM GENERATION ERROR:",
-                error
-            );
+            console.error(error);
 
             alert(
-                error.message ||
-                "Room generation failed."
+                "Room generation is not available yet. The AI chat can still be used."
             );
         } finally {
             setGenerating(false);
@@ -665,7 +637,9 @@ function Designer({
                                                     : "rounded-bl-md bg-[#f1eee8] text-gray-700"
                                                 }`}
                                         >
-                                            {msg.content}
+                                            {msg.role === "assistant"
+                                                ? renderAIMessage(msg.content)
+                                                : msg.content}
                                         </div>
                                     </div>
                                 )
