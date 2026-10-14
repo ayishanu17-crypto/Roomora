@@ -346,7 +346,7 @@ function Designer({
             }
 
             const response = await fetch(
-                "http://localhost:5000/api/chat",
+                "https://roomora-backend-0aj8.onrender.com/api/chat",
                 {
                     method: "POST",
 
@@ -418,7 +418,7 @@ function Designer({
                 await fileToBase64(imageFile);
 
             const response = await fetch(
-                "http://localhost:5000/api/generate-room",
+                "https://roomora-backend-0aj8.onrender.com/api/generate-room",
                 {
                     method: "POST",
 
